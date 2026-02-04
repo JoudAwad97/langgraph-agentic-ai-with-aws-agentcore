@@ -5,13 +5,9 @@ from loguru import logger
 from src.application.orchestrator.workflow.state import OrchestratorState
 from src.application.orchestrator.workflow.nodes import (
     orchestrator_node,
-    reflector_node,
     memory_post_hook,
 )
-from src.application.orchestrator.workflow.edges import (
-    should_continue_orchestrator,
-    should_refine_or_end,
-)
+from src.application.orchestrator.workflow.edges import should_continue_orchestrator
 from src.application.orchestrator.workflow.tools import get_orchestrator_tools
 from src.infrastructure.memory import ShortTermMemory
 
@@ -22,7 +18,7 @@ _graph_instance = None
 
 def create_orchestrator_graph(force_recreate: bool = False):
     """
-    Create the multi-agent orchestrator workflow graph with Reflection pattern.
+    Create the multi-agent orchestrator workflow graph with ReAct pattern.
 
     Uses a module-level singleton pattern instead of @lru_cache to support
     dynamic tool loading based on configuration changes.
@@ -34,58 +30,53 @@ def create_orchestrator_graph(force_recreate: bool = False):
         force_recreate: If True, recreates the graph even if one exists.
                        Useful when configuration changes at runtime.
 
-    Architecture (Reflection Pattern):
+    Architecture (ReAct Pattern):
 
         START
           │
           ▼
     ┌───────────────┐
-    │  Orchestrator │◄────────────────────┐
-    │     Node      │                     │
-    └───────┬───────┘                     │
-            │                             │
-            ▼                             │
-    [has tool calls?]                     │
-       │         │                        │
-    yes│         │no                      │
-       ▼         │                        │
-    ┌─────────┐  │                        │
-    │ToolNode │──┘                        │
-    └────┬────┘                           │
-         │                                │
-         └───► back to orchestrator       │
-                    │                     │
-                    ▼ (when no tool calls)│
-            ┌───────────────┐             │
-            │   Reflector   │             │
-            │   (Critic)    │             │
-            └───────┬───────┘             │
-                    │                     │
-            [is satisfactory?]            │
-               │         │                │
-             no│         │yes             │
-               │         │                │
-               └─────────┼────────────────┘
-                         │ (refine loop)
-                         ▼
-            ┌───────────────┐
-            │ Memory Post-  │
-            │    Hook       │
-            └───────┬───────┘
-                    │
-                    ▼
-                   END
+    │  Orchestrator │◄──────────────┐
+    │   (ReAct)     │               │
+    │               │               │
+    │ Thought:      │               │
+    │ Action:       │               │
+    └───────┬───────┘               │
+            │                       │
+            ▼                       │
+    [has tool calls?]               │
+       │         │                  │
+    yes│         │no                │
+       │         │(Final Answer)    │
+       ▼         │                  │
+    ┌─────────┐  │                  │
+    │ToolNode │  │                  │
+    │         │  │                  │
+    │Observa- │  │                  │
+    │tion:    │──┘                  │
+    └────┬────┘                     │
+         │                          │
+         └──────────────────────────┘
+                 │
+                 ▼ (when no tool calls)
+        ┌───────────────┐
+        │ Memory Post-  │
+        │    Hook       │
+        └───────┬───────┘
+                │
+                ▼
+               END
+
+    ReAct Loop (Reasoning + Acting):
+    1. Orchestrator outputs: Thought (reasoning) + Action (tool call or Final Answer)
+    2. If Action is a tool call → ToolNode executes → Observation returned → loop back
+    3. If Action is Final Answer → proceed to memory hook → END
 
     The orchestrator decides which sub-agent tools to call:
     - restaurant_data_tool: MCP Gateway for structured restaurant data (always available)
     - restaurant_explorer_tool: Browser-based web search (if ENABLE_BROWSER_TOOLS=True)
     - restaurant_research_tool: Detailed restaurant research (if ENABLE_BROWSER_TOOLS=True)
     - memory_retrieval_tool: On-demand memory retrieval (always available)
-
-    Reflection:
-    - After orchestrator finishes, reflector evaluates response quality
-    - If not satisfactory, loops back to orchestrator with feedback
-    - Maximum 2 refinement iterations to prevent infinite loops
 
     Memory:
     - Retrieval: On-demand via memory_retrieval_tool (agent calls when needed)
@@ -96,11 +87,11 @@ def create_orchestrator_graph(force_recreate: bool = False):
     if _graph_instance is not None and not force_recreate:
         return _graph_instance
 
-    logger.info("Creating orchestrator graph...")
+    logger.info("Creating orchestrator graph (ReAct pattern)...")
 
     graph_builder = StateGraph(OrchestratorState)
 
-    # Add the orchestrator node
+    # Add the orchestrator node (implements ReAct reasoning)
     graph_builder.add_node("orchestrator_node", orchestrator_node)
 
     # Get tools dynamically based on current config (respects ENABLE_BROWSER_TOOLS)
@@ -108,39 +99,27 @@ def create_orchestrator_graph(force_recreate: bool = False):
     tool_node = ToolNode(tools)
     graph_builder.add_node("tool_node", tool_node)
 
-    # Add the reflector node (quality evaluation)
-    graph_builder.add_node("reflector_node", reflector_node)
-
     # Add the memory post-hook node (saves conversation turn after response)
     graph_builder.add_node("memory_post_hook", memory_post_hook)
 
     # Define edges
-    # START -> Orchestrator (memory is now retrieved on-demand via tool)
+    # START -> Orchestrator
     graph_builder.add_edge(START, "orchestrator_node")
 
-    # Conditional edge from orchestrator - check for tool calls
+    # Conditional edge from orchestrator - ReAct loop
+    # - If tool calls: route to tools, then back to orchestrator
+    # - If no tool calls (Final Answer): route to memory hook, then END
     graph_builder.add_conditional_edges(
         "orchestrator_node",
         should_continue_orchestrator,
         {
             "tools": "tool_node",
-            "reflector": "reflector_node",  # Go to reflector when no more tool calls
-            "memory_post_hook": "memory_post_hook",  # Skip reflector for pure conversational responses
+            "end": "memory_post_hook",
         },
     )
 
-    # After tools, return to orchestrator for further processing
+    # After tools (Observation), return to orchestrator for next Thought/Action
     graph_builder.add_edge("tool_node", "orchestrator_node")
-
-    # Conditional edge from reflector - check if response is satisfactory
-    graph_builder.add_conditional_edges(
-        "reflector_node",
-        should_refine_or_end,
-        {
-            "refine": "orchestrator_node",  # Loop back for improvement
-            "end": "memory_post_hook",  # Proceed to save and end
-        },
-    )
 
     # Memory Post-Hook -> END
     graph_builder.add_edge("memory_post_hook", END)
@@ -149,7 +128,7 @@ def create_orchestrator_graph(force_recreate: bool = False):
     checkpointer = ShortTermMemory().get_memory()
 
     _graph_instance = graph_builder.compile(checkpointer=checkpointer)
-    logger.info("Orchestrator graph created successfully")
+    logger.info("Orchestrator graph (ReAct) created successfully")
 
     return _graph_instance
 

@@ -8,17 +8,17 @@ on:
         required: true
         type: string
       stack_name:
-        description: 'Stack to destroy (leave empty for all)'
+        description: "Stack to destroy (leave empty for all)"
         required: false
         type: choice
         options:
-          - '--all'
-          - 'restaurantFinder-AgentCoreStack'
-          - 'restaurantFinder-DockerImageStack'
+          - "--all"
+          - "restaurantFinder-AgentCoreStack"
+          - "restaurantFinder-DockerImageStack"
 
 env:
   AWS_REGION: us-east-2
-  NODE_VERSION: '20'
+  NODE_VERSION: "20"
 
 jobs:
   destroy:
@@ -37,14 +37,15 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
+          cache: "npm"
           cache-dependency-path: restaurant-finder-infra/package-lock.json
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
       - name: Install CDK dependencies
         working-directory: restaurant-finder-infra

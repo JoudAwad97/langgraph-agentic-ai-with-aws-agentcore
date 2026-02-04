@@ -6,14 +6,15 @@ from langchain_core.messages import BaseMessage
 
 class OrchestratorState(TypedDict):
     """
-    State for the Orchestrator Agent with Reflection pattern.
+    State for the Orchestrator Agent with ReAct pattern.
 
-    The reflection pattern adds a critic step that evaluates the orchestrator's
-    response before finalizing. If the response doesn't meet quality criteria,
-    it loops back for refinement.
+    The ReAct (Reasoning + Acting) pattern interleaves reasoning and action:
+    - Thought: Agent reasons about what to do next
+    - Action: Agent calls a tool or provides final answer
+    - Observation: System provides tool results
 
     Architecture:
-        Orchestrator → Tools → Reflector → (loop back or END)
+        START → Orchestrator → Tools → Orchestrator → ... → Memory Hook → END
     """
 
     # Messages with reducer that appends new messages
@@ -21,11 +22,6 @@ class OrchestratorState(TypedDict):
 
     # Customer name for personalization
     customer_name: str
-
-    # Reflection tracking
-    reflection_count: int  # Number of reflection iterations completed
-    reflection_feedback: str  # Feedback from reflector for improvement
-    is_satisfactory: bool  # Whether the response meets quality criteria
 
     # Tool call tracking (for efficiency limits)
     tool_call_count: int  # Number of tool calls in current turn
