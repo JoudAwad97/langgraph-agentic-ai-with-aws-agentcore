@@ -409,7 +409,7 @@ export class AgentCoreStack extends cdk.Stack {
           MEMORY_ID: this.agentCoreMemory.attrMemoryId,
 
           // Feature Flags
-          ENABLE_BROWSER_SEARCH: "true",
+          ENABLE_BROWSER_TOOLS: "true",
           GUARDRAIL_ENABLED: "true",
 
           // OpenTelemetry Observability Configuration

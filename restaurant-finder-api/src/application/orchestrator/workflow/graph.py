@@ -30,32 +30,28 @@ def create_orchestrator_graph(force_recreate: bool = False):
         force_recreate: If True, recreates the graph even if one exists.
                        Useful when configuration changes at runtime.
 
-    Architecture (ReAct Pattern):
+    Architecture (Implicit ReAct Pattern):
 
         START
           │
           ▼
     ┌───────────────┐
     │  Orchestrator │◄──────────────┐
-    │   (ReAct)     │               │
-    │               │               │
-    │ Thought:      │               │
-    │ Action:       │               │
+    │   (Reason)    │               │
     └───────┬───────┘               │
             │                       │
             ▼                       │
     [has tool calls?]               │
        │         │                  │
     yes│         │no                │
-       │         │(Final Answer)    │
+       │         │(respond)         │
        ▼         │                  │
     ┌─────────┐  │                  │
     │ToolNode │  │                  │
-    │         │  │                  │
-    │Observa- │  │                  │
-    │tion:    │──┘                  │
-    └────┬────┘                     │
-         │                          │
+    │ (Act)   │  │                  │
+    └────┬────┘  │                  │
+         │       │                  │
+         │ (Observe)                │
          └──────────────────────────┘
                  │
                  ▼ (when no tool calls)
@@ -67,10 +63,11 @@ def create_orchestrator_graph(force_recreate: bool = False):
                 ▼
                END
 
-    ReAct Loop (Reasoning + Acting):
-    1. Orchestrator outputs: Thought (reasoning) + Action (tool call or Final Answer)
-    2. If Action is a tool call → ToolNode executes → Observation returned → loop back
-    3. If Action is Final Answer → proceed to memory hook → END
+    ReAct Loop (Reasoning + Acting) - Implicit Implementation:
+    - Reasoning happens internally in the LLM (not exposed in output)
+    - Acting is done via native tool calls (LangChain tool_calls)
+    - Observation is the tool result returned to the orchestrator
+    - Loop continues until agent responds without tool calls
 
     The orchestrator decides which sub-agent tools to call:
     - restaurant_data_tool: MCP Gateway for structured restaurant data (always available)
