@@ -14,6 +14,8 @@ export class DockerImageStack extends cdk.Stack {
 
         const asset = new ecr_assets.DockerImageAsset(this, `${props.appName}-AppImage`, {
             directory: path.join(__dirname, "../../../restaurant-finder-api"), // path to the API project with Dockerfile
+            // BedrockAgentCore Runtime only supports ARM64 architecture
+            platform: ecr_assets.Platform.LINUX_ARM64,
         });
 
         this.imageUri = asset.imageUri;

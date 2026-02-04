@@ -60,6 +60,16 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
+      # Required for cross-platform Docker builds (ARM64 on AMD64 runner)
+      # BedrockAgentCore Runtime only supports ARM64 architecture
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Install CDK dependencies
         working-directory: restaurant-finder-infra
         run: |
