@@ -47,7 +47,7 @@ export class AgentCoreStack extends cdk.Stack {
       },
     );
 
-    this.mcpLambda.grantInvoke(agentCoreGatewayRole);
+    const lambdaInvokeGrant = this.mcpLambda.grantInvoke(agentCoreGatewayRole);
 
     // Add explicit Lambda resource-based policy for BedrockAgentCore service
     const lambdaPermission = new lambda.CfnPermission(
@@ -113,6 +113,20 @@ export class AgentCoreStack extends cdk.Stack {
 
     // Ensure Lambda permission is created before the GatewayTarget
     gatewayTarget.addDependency(lambdaPermission);
+
+    // Ensure the IAM policy granting the Gateway role permission to invoke Lambda
+    // is fully created before the GatewayTarget. This prevents the race condition
+    // where BedrockAgentCore validates the role permissions before IAM propagates.
+    const roleDefaultPolicy = agentCoreGatewayRole.node.tryFindChild(
+      "DefaultPolicy",
+    ) as iam.Policy | undefined;
+    if (roleDefaultPolicy) {
+      gatewayTarget.node.addDependency(roleDefaultPolicy);
+    }
+
+    // Suppress the unused variable warning - the grant is used implicitly
+    // to create the policy, and we reference it here for clarity
+    void lambdaInvokeGrant;
 
     /*****************************
      * AgentCore Memory
