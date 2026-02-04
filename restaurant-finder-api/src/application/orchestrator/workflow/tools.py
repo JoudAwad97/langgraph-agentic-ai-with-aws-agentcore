@@ -37,40 +37,14 @@ async def restaurant_explorer_tool(
     config: Annotated[RunnableConfig, InjectedToolArg],
 ) -> str:
     """
-    Use the Restaurant Explorer agent to search for restaurants and gather information.
-
-    This tool searches for restaurants using web browsing and external APIs.
-    Use it to find restaurants based on criteria like cuisine type, location,
-    price range, and dietary restrictions.
+    Search for restaurants via web browsing. Use for "trending" or "new" restaurants,
+    or when restaurant_data_tool returns insufficient results (<4).
 
     Args:
-        query: The search request describing what kind of restaurants to find.
-               Include details like cuisine, location, price range, and any
-               special requirements.
+        query: Search request with cuisine, location, price, dietary needs.
 
     Returns:
-        JSON structured restaurant data with the following schema:
-        - query: The original search query
-        - total_results: Number of restaurants found
-        - restaurants: List of restaurant objects containing:
-          - name: Restaurant name
-          - cuisine_type: Type of cuisine
-          - rating: Rating out of 5
-          - review_count: Number of reviews
-          - price_range: $, $$, $$$, or $$$$
-          - address: Street address
-          - city: City location
-          - features: List of features (outdoor seating, etc.)
-          - dietary_options: List of dietary accommodations
-          - operating_hours: Business hours
-          - reservation_available: Whether reservations are available
-        - search_location: Location used for search
-        - data_source: Source of the data
-
-    Example queries:
-        - "Find Italian restaurants near downtown under $30"
-        - "Search for vegetarian-friendly Japanese restaurants in San Francisco"
-        - "Get details for highly-rated Thai restaurants with outdoor seating"
+        JSON with restaurants (name, cuisine, rating, price, address, features).
     """
     # Extract thread_id from config for browser session isolation
     # Generate a unique UUID as fallback to avoid session conflicts
@@ -94,29 +68,19 @@ async def restaurant_data_tool(
     limit: int = 5,
 ) -> str:
     """
-    Use the Restaurant Data agent to search for restaurants via MCP Gateway.
-
-    This tool connects to an AgentCore Gateway using MCP protocol to fetch
-    restaurant data from a backend Lambda function. Use this for structured
-    restaurant searches with specific filters.
+    Primary tool for restaurant searches. Fast, structured data from database.
+    Always try this first before using explorer_tool.
 
     Args:
-        query: Natural language description of what restaurants to find.
-        cuisine: Type of cuisine (e.g., "Italian", "Japanese", "Mexican").
-        location: City or area to search (e.g., "New York", "San Francisco").
-        price_range: Price level - "$" (budget), "$$" (moderate),
-                    "$$$" (upscale), "$$$$" (fine dining).
-        dietary_restrictions: List of dietary requirements
-                             (e.g., ["Vegetarian", "Gluten-Free"]).
-        limit: Maximum number of results to return (1-10).
+        query: What restaurants to find.
+        cuisine: Cuisine type (Italian, Japanese, etc.).
+        location: City or area to search.
+        price_range: "$", "$$", "$$$", or "$$$$".
+        dietary_restrictions: List like ["Vegetarian", "Gluten-Free"].
+        limit: Max results (1-10).
 
     Returns:
-        JSON structured restaurant data with detailed information including
-        ratings, features, dietary options, and operating hours.
-
-    Example usage:
-        - restaurant_data_tool("Find Italian food", cuisine="Italian", location="NYC")
-        - restaurant_data_tool("Vegan options", dietary_restrictions=["Vegan"], price_range="$$")
+        JSON with restaurants including ratings, features, dietary options.
     """
     result: RestaurantSearchResult = await run_restaurant_data_agent(
         query=query,
@@ -136,44 +100,18 @@ async def memory_retrieval_tool(
     config: Annotated[RunnableConfig, InjectedToolArg],
 ) -> str:
     """
-    Retrieve relevant memories from the user's long-term memory.
-
-    Use this tool to fetch personalized context about the user before making
-    recommendations. Call this tool with the appropriate memory types based
-    on what information you need.
-
-    IMPORTANT: Memory types are retrieved in PARALLEL for speed optimization.
-    You can request multiple types in a single call.
+    Retrieve user's stored preferences, facts, or conversation summaries.
+    Use for personalization before making recommendations.
 
     Args:
-        query: The search query to find relevant memories. Use the user's
-               current request or intent as the query for semantic matching.
-        memory_types: List of memory types to retrieve. Options:
-            - "preferences": User preferences (dietary restrictions, favorite
-                            cuisines, price preferences, location preferences)
-            - "facts": Semantic facts from previous conversations (important
-                      details the user has shared before)
-            - "summaries": Conversation summaries from the current session
+        query: Search query for semantic matching.
+        memory_types: List of types to retrieve:
+            - "preferences": Dietary, cuisine, price, location preferences
+            - "facts": Details from past conversations
+            - "summaries": Current session context
 
     Returns:
-        JSON object with retrieved memories organized by type:
-        {
-            "preferences": [...],  // User preference items
-            "facts": [...],        // Conversation facts
-            "summaries": [...]     // Session summaries
-        }
-
-    When to use each memory type:
-        - "preferences": When you need to know dietary restrictions, cuisine
-                        preferences, budget, or location preferences
-        - "facts": When you want to recall specific details from past conversations
-        - "summaries": When you need context about what was discussed earlier
-                      in the current session
-
-    Example usage:
-        - memory_retrieval_tool(query="Italian food", memory_types=["preferences"])
-        - memory_retrieval_tool(query="restaurant", memory_types=["preferences", "facts"])
-        - memory_retrieval_tool(query="recommendations", memory_types=["preferences", "facts", "summaries"])
+        JSON with memories organized by type.
     """
     configurable = config.get("configurable", {}) if config else {}
     actor_id = configurable.get("actor_id", "user:default")
@@ -223,54 +161,17 @@ async def restaurant_research_tool(
     config: Annotated[RunnableConfig, InjectedToolArg] = None,
 ) -> str:
     """
-    Research detailed information about a specific restaurant using web browsing.
-
-    Use this tool when the user asks for MORE DETAILS about a restaurant that was
-    already mentioned, or when you need to look up specific information like:
-    - Full menu details
-    - Customer reviews and ratings from multiple sources
-    - Reservation policies
-    - Parking information
-    - Special events or happy hours
-    - Photos or ambiance descriptions
-    - Contact information and directions
-
-    This is different from restaurant_explorer_tool which searches for MULTIPLE
-    restaurants. Use this tool for deep research on ONE specific restaurant.
+    Deep research on ONE specific restaurant. Use when user asks for more details
+    about a restaurant (menu, reviews, parking, reservations, hours).
 
     Args:
-        restaurant_name: The name of the restaurant to research.
-        location: The city or area where the restaurant is located.
-        research_topics: Optional list of specific topics to research. Options:
-            - "menu": Full menu with prices
-            - "reviews": Customer reviews and ratings
-            - "reservations": Booking policies and availability
-            - "parking": Parking options nearby
-            - "events": Special events, happy hours, live music
-            - "contact": Phone, email, website
-            - "directions": Address and how to get there
-            If not specified, will do a general research covering key topics.
+        restaurant_name: Restaurant to research.
+        location: City or area.
+        research_topics: Optional topics: "menu", "reviews", "reservations",
+                        "parking", "events", "contact", "directions".
 
     Returns:
-        JSON object with detailed research findings:
-        {
-            "restaurant_name": "...",
-            "location": "...",
-            "research_summary": "...",
-            "details": {
-                "menu_highlights": [...],
-                "reviews_summary": "...",
-                "contact_info": {...},
-                "special_features": [...],
-                ...
-            },
-            "sources": [...]
-        }
-
-    Example usage:
-        - restaurant_research_tool("The Grill House", "Hamburg", ["menu", "reviews"])
-        - restaurant_research_tool("Bella Italia", "San Francisco", ["reservations", "parking"])
-        - restaurant_research_tool("Tokyo Garden", "NYC")  # General research
+        JSON with detailed research findings.
     """
     # Extract thread_id from config for browser session isolation
     configurable = config.get("configurable", {}) if config else {}
