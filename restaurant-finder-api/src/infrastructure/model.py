@@ -18,7 +18,6 @@ class ModelType(str, Enum):
 
     DEFAULT = "default"  # General purpose, backwards compatible
     ORCHESTRATOR = "orchestrator"  # Main agent, tool selection, conversations
-    REFLECTOR = "reflector"  # Quality evaluation, structured output
     EXTRACTION = "extraction"  # Data extraction, JSON parsing
 
 
@@ -27,7 +26,6 @@ def _get_model_id_for_type(model_type: ModelType) -> str:
     model_map = {
         ModelType.DEFAULT: settings.CONVERSATION_CHAT_MODEL_ID,
         ModelType.ORCHESTRATOR: settings.ORCHESTRATOR_MODEL_ID,
-        ModelType.REFLECTOR: settings.REFLECTOR_MODEL_ID,
         ModelType.EXTRACTION: settings.EXTRACTION_MODEL_ID,
     }
     return model_map.get(model_type, settings.CONVERSATION_CHAT_MODEL_ID)
@@ -52,7 +50,7 @@ def get_model(
             - 0.7: For conversational tasks
         streaming: Enable streaming responses.
         model_id: Model ID override. Takes precedence over model_type.
-        model_type: The type of model to use (orchestrator, reflector, extraction).
+        model_type: The type of model to use (orchestrator, extraction).
             Defaults to DEFAULT for backwards compatibility.
 
     Returns:

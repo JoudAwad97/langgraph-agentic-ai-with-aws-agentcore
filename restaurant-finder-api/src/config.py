@@ -27,10 +27,6 @@ class Settings(BaseSettings):
         default="us.anthropic.claude-3-5-haiku-20241022-v1:0",
         description="Model for main orchestrator (tool selection, conversation management).",
     )
-    REFLECTOR_MODEL_ID: str = Field(
-        default="us.anthropic.claude-3-5-haiku-20241022-v1:0",
-        description="Model for reflector (quality evaluation, simple structured output).",
-    )
     EXTRACTION_MODEL_ID: str = Field(
         default="us.anthropic.claude-3-5-haiku-20241022-v1:0",
         description="Model for data extraction tasks (JSON parsing, structured data).",

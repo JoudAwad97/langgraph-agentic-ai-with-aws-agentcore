@@ -106,22 +106,3 @@ class RestaurantSearchResult(BaseModel):
     )
 
 
-class ReflectionResult(BaseModel):
-    """Structured output for the reflector's quality evaluation."""
-
-    is_satisfactory: bool = Field(
-        description="Whether the response meets quality criteria (true if score >= 7)"
-    )
-    score: int = Field(
-        ge=1,
-        le=10,
-        description="Quality score from 1-10 (1=unacceptable, 10=excellent)"
-    )
-    issues: list[str] = Field(
-        default_factory=list,
-        description="List of specific issues found in the response"
-    )
-    feedback: str = Field(
-        default="",
-        description="Specific feedback for improvement if not satisfactory"
-    )

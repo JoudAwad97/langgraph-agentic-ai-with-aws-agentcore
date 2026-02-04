@@ -243,7 +243,7 @@ class ObservabilityManager:
         Record a workflow step as a span event with standard attributes.
 
         Args:
-            step_name: Name of the workflow step (e.g., "orchestrator", "reflector")
+            step_name: Name of the workflow step (e.g., "orchestrator", "memory_post_hook")
             step_type: Type of step (e.g., "node", "edge", "tool")
             duration_ms: Duration of the step in milliseconds
             success: Whether the step succeeded

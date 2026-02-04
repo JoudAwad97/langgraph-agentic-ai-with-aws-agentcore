@@ -85,28 +85,57 @@ async def orchestrator_node(
 
     configurable = config.get("configurable", {})
     customer_name = configurable.get("customer_name", "Guest")
+    session_id = configurable.get("thread_id", "unknown")
+    actor_id = configurable.get("actor_id", "unknown")
     tool_call_count = state.get("tool_call_count", 0)
+    react_iteration = tool_call_count + 1  # Track which ReAct loop iteration
 
     messages = list(state["messages"])
 
-    logger.debug(f"ReAct orchestrator invoked with {len(messages)} messages")
+    # Get the chain and prompt metadata for tracing
+    chain_result = get_orchestrator_chain(customer_name=customer_name)
+    prompt_meta = chain_result.prompt_metadata
+
+    logger.debug(
+        f"ReAct orchestrator invoked: iteration={react_iteration}, "
+        f"messages={len(messages)}, prompt_version={prompt_meta.version}"
+    )
+
+    # Build comprehensive span attributes for observability
+    span_attributes = {
+        # Customer/session context
+        "customer.name": customer_name,
+        "session.id": session_id,
+        "actor.id": actor_id,
+        # Prompt metadata (for prompt version tracking)
+        "prompt.name": prompt_meta.name,
+        "prompt.version": prompt_meta.version or "unknown",
+        "prompt.id": prompt_meta.id or "unknown",
+        # ReAct loop state
+        "react.iteration": react_iteration,
+        "react.tool_call_count": tool_call_count,
+        # Request context
+        "message.count": len(messages),
+        "input.token_estimate": sum(
+            len(str(m.content)) // 4 for m in messages if hasattr(m, "content")
+        ),
+    }
 
     with observability.create_span(
         "orchestrator.invoke",
-        attributes={
-            "customer.name": customer_name,
-            "message.count": len(messages),
-            "tool_call_count": tool_call_count,
-        }
+        attributes=span_attributes,
     ):
-        orchestrator_chain = get_orchestrator_chain(customer_name=customer_name)
-
-        response = await orchestrator_chain.ainvoke(
+        response = await chain_result.chain.ainvoke(
             {"messages": messages},
             config,
         )
 
-    # Record workflow step completion
+    # Track tool calls for efficiency limiting
+    has_tool_calls = hasattr(response, "tool_calls") and response.tool_calls
+    new_tool_count = tool_call_count + (len(response.tool_calls) if has_tool_calls else 0)
+    tool_names = [tc.get("name", "unknown") for tc in response.tool_calls] if has_tool_calls else []
+
+    # Record workflow step completion with comprehensive metadata
     duration_ms = (time.time() - start_time) * 1000
     observability.record_workflow_step(
         step_name="orchestrator",
@@ -114,16 +143,21 @@ async def orchestrator_node(
         duration_ms=duration_ms,
         success=True,
         metadata={
-            "tool_call_count": str(tool_call_count),
+            # Prompt tracking
+            "prompt.name": prompt_meta.name,
+            "prompt.version": prompt_meta.version or "unknown",
+            # ReAct state
+            "react.iteration": str(react_iteration),
+            "react.has_tool_calls": str(has_tool_calls),
+            "react.tool_names": ",".join(tool_names) if tool_names else "none",
+            # Response metrics
+            "response.has_content": str(bool(response.content)),
+            "output.token_estimate": str(len(str(response.content)) // 4) if response.content else "0",
         }
     )
 
-    # Track tool calls for efficiency limiting
-    has_tool_calls = hasattr(response, "tool_calls") and response.tool_calls
-    new_tool_count = tool_call_count + (len(response.tool_calls) if has_tool_calls else 0)
-
     if has_tool_calls:
-        logger.debug(f"ReAct: Agent requested {len(response.tool_calls)} tool call(s)")
+        logger.debug(f"ReAct: Agent requested tools: {tool_names}")
     else:
         logger.debug("ReAct: Agent provided Final Answer (no tool calls)")
 

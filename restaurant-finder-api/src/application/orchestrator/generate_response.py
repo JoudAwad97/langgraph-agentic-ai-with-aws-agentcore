@@ -103,13 +103,13 @@ async def get_streaming_response(
     """
     Get response from the orchestrator workflow using buffer mode.
 
-    Buffer Mode (Quality-First):
-    - Runs the full workflow including reflector evaluation
-    - If response needs refinement, loops back to improve it
-    - Only yields the FINAL quality-checked response to the user
+    Buffer Mode:
+    - Runs the full ReAct workflow (Reasoning + Acting loop)
+    - Agent reasons, calls tools, observes results, and continues until ready
+    - Only yields the FINAL response after the ReAct loop completes
 
-    This ensures users only see responses that pass quality evaluation,
-    avoiding confusing double-responses or partial content.
+    This ensures users only see the final response, avoiding confusing
+    intermediate outputs or partial content during tool execution.
 
     Args:
         messages: User message(s) to process
@@ -117,7 +117,7 @@ async def get_streaming_response(
         conversation_id: Unique ID for the conversation thread (for memory persistence)
 
     Yields:
-        The final response content after quality evaluation
+        The final response content after ReAct loop completes
     """
     graph = create_orchestrator_graph()
 
@@ -133,10 +133,9 @@ async def get_streaming_response(
             }
         }
 
-        logger.info(f"Starting buffered workflow execution (thread_id={thread_id})")
+        logger.info(f"Starting ReAct workflow execution (thread_id={thread_id})")
 
-        # Run the full workflow including reflector and any refinement loops
-        # This waits for completion before returning
+        # Run the full ReAct workflow - waits for completion before returning
         result = await graph.ainvoke(
             input={
                 "messages": __format_messages(messages=messages),
@@ -145,7 +144,7 @@ async def get_streaming_response(
             config=config,
         )
 
-        logger.info("Workflow execution complete, extracting final response")
+        logger.info("ReAct workflow complete, extracting final response")
 
         # Extract the final AI message from the result
         final_response = ""
@@ -163,10 +162,9 @@ async def get_streaming_response(
             logger.warning("No valid final response found in workflow result")
             final_response = "I apologize, but I wasn't able to generate a response. Please try again."
 
-        # Log reflection results if available
-        reflection_count = result.get("reflection_count", 0)
-        is_satisfactory = result.get("is_satisfactory", True)
-        logger.info(f"Final response ready: reflection_iterations={reflection_count}, satisfactory={is_satisfactory}")
+        # Log ReAct completion metrics
+        tool_call_count = result.get("tool_call_count", 0)
+        logger.info(f"Final response ready: tool_calls={tool_call_count}")
 
         # Yield the final response
         # We yield in chunks to maintain SSE compatibility and allow frontend to process

@@ -1,10 +1,27 @@
+from typing import NamedTuple
+
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.runnables import Runnable
 from loguru import logger
 
 from src.config import settings
 from src.domain.prompts import ORCHESTRATOR_AGENT_PROMPT
 from src.application.orchestrator.workflow.tools import get_orchestrator_tools
 from src.infrastructure.model import get_model, ModelType
+
+
+class PromptMetadata(NamedTuple):
+    """Metadata about the prompt used for observability tracing."""
+    name: str
+    version: str | None
+    id: str | None
+    arn: str | None
+
+
+class OrchestratorChainResult(NamedTuple):
+    """Result containing the chain and its prompt metadata for tracing."""
+    chain: Runnable
+    prompt_metadata: PromptMetadata
 
 
 def _escape_braces(text: str) -> str:
@@ -20,7 +37,33 @@ def _escape_braces(text: str) -> str:
     return text.replace("{", "{{").replace("}", "}}")
 
 
-def get_orchestrator_chain(customer_name: str = "Guest", include_browser_tools: bool | None = None):
+def get_prompt_metadata() -> PromptMetadata:
+    """
+    Get metadata about the orchestrator prompt for observability tracing.
+
+    Returns:
+        PromptMetadata with name, version, id, and arn from Bedrock sync.
+    """
+    bedrock_meta = ORCHESTRATOR_AGENT_PROMPT.bedrock_metadata
+    if bedrock_meta:
+        return PromptMetadata(
+            name=bedrock_meta.get("name", ORCHESTRATOR_AGENT_PROMPT.name),
+            version=bedrock_meta.get("version"),
+            id=bedrock_meta.get("id"),
+            arn=bedrock_meta.get("arn"),
+        )
+    return PromptMetadata(
+        name=ORCHESTRATOR_AGENT_PROMPT.name,
+        version=None,
+        id=None,
+        arn=None,
+    )
+
+
+def get_orchestrator_chain(
+    customer_name: str = "Guest",
+    include_browser_tools: bool | None = None,
+) -> OrchestratorChainResult:
     """
     Create the orchestrator chain with bound sub-agent tools.
 
@@ -44,7 +87,9 @@ def get_orchestrator_chain(customer_name: str = "Guest", include_browser_tools: 
                               If None, uses ENABLE_BROWSER_TOOLS from config.
 
     Returns:
-        A runnable chain (prompt | model) with tools bound.
+        OrchestratorChainResult with:
+        - chain: A runnable chain (prompt | model) with tools bound
+        - prompt_metadata: Metadata about the prompt for tracing
     """
     # Determine browser tools setting
     use_browser = include_browser_tools if include_browser_tools is not None else settings.ENABLE_BROWSER_TOOLS
@@ -55,6 +100,7 @@ def get_orchestrator_chain(customer_name: str = "Guest", include_browser_tools: 
 
     # Get the appropriate tools based on config
     tools = get_orchestrator_tools(include_browser_tools=use_browser)
+    tool_names = [t.name for t in tools]
 
     # Bind the tools to the model
     model = model.bind_tools(tools)
@@ -63,9 +109,15 @@ def get_orchestrator_chain(customer_name: str = "Guest", include_browser_tools: 
     # interpreting them as template variables
     safe_customer_name = _escape_braces(customer_name)
 
-    # Get the orchestrator prompt
+    # Get the orchestrator prompt and its metadata
     system_message = ORCHESTRATOR_AGENT_PROMPT.format(
         customer_name=safe_customer_name,
+    )
+    prompt_metadata = get_prompt_metadata()
+
+    logger.debug(
+        f"Orchestrator prompt: name={prompt_metadata.name}, "
+        f"version={prompt_metadata.version}, tools={tool_names}"
     )
 
     prompt = ChatPromptTemplate.from_messages(
@@ -75,4 +127,7 @@ def get_orchestrator_chain(customer_name: str = "Guest", include_browser_tools: 
         ]
     )
 
-    return prompt | model
+    return OrchestratorChainResult(
+        chain=prompt | model,
+        prompt_metadata=prompt_metadata,
+    )
