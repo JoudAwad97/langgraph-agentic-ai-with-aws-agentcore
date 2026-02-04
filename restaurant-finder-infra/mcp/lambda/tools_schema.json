@@ -1,0 +1,60 @@
+[
+  {
+    "name": "search_restaurants",
+    "description": "Search for restaurants based on cuisine, location, price range, and dietary restrictions. Returns a list of matching restaurants with details like ratings, features, and hours.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "cuisine": {
+          "type": "string",
+          "description": "Type of cuisine (e.g., \"Italian\", \"Japanese\", \"Mexican\", \"Indian\", \"Thai\")"
+        },
+        "location": {
+          "type": "string",
+          "description": "City or area to search (e.g., \"New York\", \"San Francisco\", \"Chicago\")"
+        },
+        "price_range": {
+          "type": "string",
+          "description": "Price level. Valid values: \"$\" (budget), \"$$\" (moderate), \"$$$\" (upscale), \"$$$$\" (fine dining). Default: \"$$\""
+        },
+        "dietary_restrictions": {
+          "type": "array",
+          "description": "Dietary requirements (e.g., [\"Vegetarian\", \"Gluten-Free\"])",
+          "items": {
+            "type": "string"
+          }
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Maximum number of results to return (1-10, default: 5)"
+        }
+      },
+      "required": []
+    }
+  },
+  {
+    "name": "placeholder_tool",
+    "description": "No-op tool that demonstrates passing arguments",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "string_param": {
+          "type": "string",
+          "description": "Example string parameter"
+        },
+        "int_param": {
+          "type": "integer",
+          "description": "Example integer parameter"
+        },
+        "float_array_param": {
+          "type": "array",
+          "description": "Example float array parameter",
+          "items": {
+            "type": "number"
+          }
+        }
+      },
+      "required": []
+    }
+  }
+]

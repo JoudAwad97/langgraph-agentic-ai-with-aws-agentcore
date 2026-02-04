@@ -1,0 +1,101 @@
+name: Deploy Infrastructure
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "restaurant-finder-infra/**"
+      - "restaurant-finder-api/**"
+      - ".github/workflows/deploy-infra.yml"
+  workflow_dispatch:
+    inputs:
+      skip_docker_build:
+        description: "Skip Docker build (use existing image)"
+        required: false
+        default: "false"
+        type: boolean
+      image_uri:
+        description: "Existing ECR image URI (required if skip_docker_build is true)"
+        required: false
+        type: string
+
+env:
+  AWS_REGION: us-east-2
+  NODE_VERSION: "20"
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  deploy:
+    name: Deploy CDK Stack
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+          cache-dependency-path: restaurant-finder-infra/package-lock.json
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          # Alternative: use access keys instead of OIDC
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Install CDK dependencies
+        working-directory: restaurant-finder-infra
+        run: |
+          npm ci
+          npm install -g aws-cdk
+
+      - name: CDK Synth (validate templates)
+        working-directory: restaurant-finder-infra
+        run: |
+          if [ "${{ github.event.inputs.skip_docker_build }}" == "true" ] && [ -n "${{ github.event.inputs.image_uri }}" ]; then
+            echo "Synthesizing with existing image URI..."
+            npx cdk synth -c imageUri=${{ github.event.inputs.image_uri }}
+          else
+            echo "Synthesizing with Docker build..."
+            npx cdk synth
+          fi
+
+      - name: CDK Deploy
+        working-directory: restaurant-finder-infra
+        run: |
+          if [ "${{ github.event.inputs.skip_docker_build }}" == "true" ] && [ -n "${{ github.event.inputs.image_uri }}" ]; then
+            echo "Deploying with existing image URI..."
+            npx cdk deploy --all --require-approval never -c imageUri=${{ github.event.inputs.image_uri }}
+          else
+            echo "Deploying with Docker build..."
+            npx cdk deploy --all --require-approval never
+          fi
+
+      - name: Output Stack Info
+        working-directory: restaurant-finder-infra
+        run: |
+          echo "## Deployment Outputs" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          npx cdk list 2>/dev/null | while read stack; do
+            echo "### $stack" >> $GITHUB_STEP_SUMMARY
+            aws cloudformation describe-stacks --stack-name "$stack" --query 'Stacks[0].Outputs[*].[OutputKey,OutputValue]' --output table 2>/dev/null >> $GITHUB_STEP_SUMMARY || true
+            echo "" >> $GITHUB_STEP_SUMMARY
+          done

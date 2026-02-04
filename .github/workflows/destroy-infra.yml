@@ -1,0 +1,78 @@
+name: Destroy Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_destroy:
+        description: 'Type "DESTROY" to confirm stack deletion'
+        required: true
+        type: string
+      stack_name:
+        description: 'Stack to destroy (leave empty for all)'
+        required: false
+        type: choice
+        options:
+          - '--all'
+          - 'restaurantFinder-AgentCoreStack'
+          - 'restaurantFinder-DockerImageStack'
+
+env:
+  AWS_REGION: us-east-2
+  NODE_VERSION: '20'
+
+jobs:
+  destroy:
+    name: Destroy CDK Stack
+    runs-on: ubuntu-latest
+    if: github.event.inputs.confirm_destroy == 'DESTROY'
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: restaurant-finder-infra/package-lock.json
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install CDK dependencies
+        working-directory: restaurant-finder-infra
+        run: |
+          npm ci
+          npm install -g aws-cdk
+
+      - name: CDK Destroy
+        working-directory: restaurant-finder-infra
+        run: |
+          echo "Destroying stack: ${{ github.event.inputs.stack_name }}"
+          npx cdk destroy ${{ github.event.inputs.stack_name }} --force
+
+      - name: Cleanup Summary
+        run: |
+          echo "## Stack Destroyed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Stack(s) destroyed: ${{ github.event.inputs.stack_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Triggered by: @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+
+  reject:
+    name: Destroy Rejected
+    runs-on: ubuntu-latest
+    if: github.event.inputs.confirm_destroy != 'DESTROY'
+    steps:
+      - name: Reject
+        run: |
+          echo "Destroy rejected - confirmation text did not match 'DESTROY'"
+          echo "You entered: '${{ github.event.inputs.confirm_destroy }}'"
+          exit 1
