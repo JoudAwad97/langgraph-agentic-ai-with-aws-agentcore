@@ -37,8 +37,13 @@ async def restaurant_explorer_tool(
     config: Annotated[RunnableConfig, InjectedToolArg],
 ) -> str:
     """
-    Search for restaurants via web browsing. Use for "trending" or "new" restaurants,
-    or when restaurant_data_tool returns insufficient results (<4).
+    BACKUP ONLY - Browser-based web search for restaurants.
+
+    WARNING: This tool is SLOW and EXPENSIVE. Only use as a LAST RESORT when:
+    1. restaurant_data_tool returned fewer than 4 results, OR
+    2. User explicitly asks for "trending", "new", or "latest" restaurants
+
+    DO NOT use this for normal restaurant searches - use restaurant_data_tool instead.
 
     Args:
         query: Search request with cuisine, location, price, dietary needs.
@@ -68,19 +73,24 @@ async def restaurant_data_tool(
     limit: int = 5,
 ) -> str:
     """
-    Primary tool for restaurant searches via SearchAPI web search.
-    Returns real restaurant data from the web. Always try this first.
+    PRIMARY TOOL - ALWAYS use this first for ANY restaurant search.
+
+    Fast, reliable restaurant search via Google Local API. Returns structured
+    data with ratings, reviews, addresses, phone numbers, hours, and more.
+
+    IMPORTANT: This is your go-to tool for all restaurant searches. Only use
+    browser tools (restaurant_explorer_tool) if this returns fewer than 4 results.
 
     Args:
         query: What restaurants to find (e.g., "best pizza near Times Square").
         cuisine: Cuisine type (Italian, Japanese, etc.).
-        location: City or area to search.
+        location: City or area to search (REQUIRED for best results).
         price_range: "$", "$$", "$$$", or "$$$$".
         dietary_restrictions: List like ["Vegetarian", "Gluten-Free"].
         limit: Max results (1-10).
 
     Returns:
-        JSON with restaurants including ratings, addresses, contact info.
+        JSON with restaurants including ratings, addresses, hours, phone, and more.
     """
     result: RestaurantSearchResult = await run_restaurant_data_agent(
         query=query,
@@ -161,11 +171,16 @@ async def restaurant_research_tool(
     config: Annotated[RunnableConfig, InjectedToolArg] = None,
 ) -> str:
     """
-    Deep research on ONE specific restaurant. Use when user asks for more details
-    about a restaurant (menu, reviews, parking, reservations, hours).
+    FOLLOW-UP ONLY - Deep research on ONE specific restaurant.
+
+    Use ONLY when user asks for more details about a restaurant that was already
+    mentioned or recommended. Examples: "Tell me more about X", "What's on the
+    menu at X?", "Does X have parking?", "How do I make a reservation at X?"
+
+    DO NOT use this for initial restaurant searches - use restaurant_data_tool instead.
 
     Args:
-        restaurant_name: Restaurant to research.
+        restaurant_name: Restaurant to research (must be a specific restaurant).
         location: City or area.
         research_topics: Optional topics: "menu", "reviews", "reservations",
                         "parking", "events", "contact", "directions".
