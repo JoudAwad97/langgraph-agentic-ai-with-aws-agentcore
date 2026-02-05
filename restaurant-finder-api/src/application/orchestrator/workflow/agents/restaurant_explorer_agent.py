@@ -87,21 +87,25 @@ def parse_restaurant(data: dict) -> Restaurant:
     Returns:
         Restaurant: Parsed restaurant object with defaults for missing fields.
     """
-    price_str = data.get("price_range", "$$")
+    price_str = data.get("price_range") or "$$"
     price_range = PRICE_RANGE_MAP.get(price_str, PriceRange.MODERATE)
 
+    # Use `or` to handle both missing keys AND None values
+    rating_val = data.get("rating")
+    review_val = data.get("review_count")
+
     return Restaurant(
-        name=data.get("name", "Unknown Restaurant"),
-        cuisine_type=data.get("cuisine_type", "Various"),
-        rating=float(data.get("rating", 0.0)),
-        review_count=int(data.get("review_count", 0)),
+        name=data.get("name") or "Unknown Restaurant",
+        cuisine_type=data.get("cuisine_type") or "Various",
+        rating=float(rating_val) if rating_val is not None else 0.0,
+        review_count=int(review_val) if review_val is not None else 0,
         price_range=price_range,
-        address=data.get("address", ""),
-        city=data.get("city", ""),
-        features=data.get("features", []),
-        dietary_options=data.get("dietary_options", []),
-        operating_hours=data.get("operating_hours", ""),
-        reservation_available=data.get("reservation_available", False),
+        address=data.get("address") or "",
+        city=data.get("city") or "",
+        features=data.get("features") or [],
+        dietary_options=data.get("dietary_options") or [],
+        operating_hours=data.get("operating_hours") or "",
+        reservation_available=bool(data.get("reservation_available")),
     )
 
 

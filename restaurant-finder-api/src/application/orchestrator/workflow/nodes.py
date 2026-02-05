@@ -3,8 +3,12 @@ from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.runnables import RunnableConfig
 from loguru import logger
 
-from src.application.orchestrator.workflow.state import OrchestratorState
-from src.application.orchestrator.workflow.chains import get_orchestrator_chain
+from src.application.orchestrator.workflow.state import OrchestratorState, IntentType
+from src.application.orchestrator.workflow.chains import (
+    get_search_agent_chain,
+    get_router_chain,
+    get_simple_response_chain,
+)
 from src.infrastructure.memory import ShortTermMemory
 from src.infrastructure.observability import get_observability_manager
 
@@ -51,15 +55,15 @@ def _get_memory_instance() -> ShortTermMemory:
     return _memory_instance
 
 
-async def orchestrator_node(
+async def search_agent_node(
     state: OrchestratorState,
     config: RunnableConfig,
 ) -> dict:
     """
-    Orchestrator node implementing the ReAct (Reasoning + Acting) pattern.
+    Search agent node implementing the ReAct (Reasoning + Acting) pattern.
 
-    This node uses the orchestrator chain which has sub-agent tools bound,
-    including the memory_retrieval_tool for on-demand memory access.
+    This node handles restaurant search requests using the search agent chain
+    which has tools bound for finding and researching restaurants.
 
     ReAct Pattern:
     1. Thought: Agent reasons about what to do next
@@ -78,7 +82,7 @@ async def orchestrator_node(
         config: Runtime configuration with customer context.
 
     Returns:
-        Updated state with the orchestrator's response.
+        Updated state with the search agent's response.
     """
     observability = get_observability_manager()
     start_time = time.time()
@@ -93,11 +97,11 @@ async def orchestrator_node(
     messages = list(state["messages"])
 
     # Get the chain and prompt metadata for tracing
-    chain_result = get_orchestrator_chain(customer_name=customer_name)
+    chain_result = get_search_agent_chain(customer_name=customer_name)
     prompt_meta = chain_result.prompt_metadata
 
     logger.debug(
-        f"ReAct orchestrator invoked: iteration={react_iteration}, "
+        f"Search agent invoked: iteration={react_iteration}, "
         f"messages={len(messages)}, prompt_version={prompt_meta.version}"
     )
 
@@ -122,7 +126,7 @@ async def orchestrator_node(
     }
 
     with observability.create_span(
-        "orchestrator.invoke",
+        "search_agent.invoke",
         attributes=span_attributes,
     ):
         response = await chain_result.chain.ainvoke(
@@ -138,7 +142,7 @@ async def orchestrator_node(
     # Record workflow step completion with comprehensive metadata
     duration_ms = (time.time() - start_time) * 1000
     observability.record_workflow_step(
-        step_name="orchestrator",
+        step_name="search_agent",
         step_type="node",
         duration_ms=duration_ms,
         success=True,
@@ -157,15 +161,139 @@ async def orchestrator_node(
     )
 
     if has_tool_calls:
-        logger.debug(f"ReAct: Agent requested tools: {tool_names}")
+        logger.debug(f"Search agent requested tools: {tool_names}")
     else:
-        logger.debug("ReAct: Agent provided Final Answer (no tool calls)")
+        logger.debug("Search agent provided Final Answer (no tool calls)")
 
     return {
         "messages": response,
         "tool_call_count": new_tool_count,
         "made_tool_calls": state.get("made_tool_calls", False) or has_tool_calls,
     }
+
+
+async def router_node(
+    state: OrchestratorState,
+    config: RunnableConfig,
+) -> dict:
+    """
+    Router node that classifies user intent for routing decisions.
+
+    Intent types:
+    - restaurant_search: Route to the search agent with tools
+    - simple: Route to simple response (no tools needed)
+    - off_topic: Route to simple response with redirect
+
+    Args:
+        state: The orchestrator state containing messages.
+        config: Runtime configuration.
+
+    Returns:
+        Updated state with the classified intent.
+    """
+    observability = get_observability_manager()
+    start_time = time.time()
+
+    messages = list(state["messages"])
+
+    router_chain = get_router_chain()
+
+    with observability.create_span(
+        "router.classify",
+        attributes={"message.count": len(messages)},
+    ):
+        response = await router_chain.ainvoke(
+            {"messages": messages},
+            config,
+        )
+
+    # Parse the intent from the response
+    response_text = _extract_text_content(response.content).strip().lower()
+
+    # Map response to intent type
+    if "restaurant_search" in response_text:
+        intent: IntentType = "restaurant_search"
+    elif "simple" in response_text:
+        intent = "simple"
+    elif "off_topic" in response_text:
+        intent = "off_topic"
+    else:
+        # Default to restaurant_search if unclear
+        logger.warning(f"Unclear intent classification: {response_text}, defaulting to restaurant_search")
+        intent = "restaurant_search"
+
+    duration_ms = (time.time() - start_time) * 1000
+    observability.record_workflow_step(
+        step_name="router",
+        step_type="node",
+        duration_ms=duration_ms,
+        success=True,
+        metadata={"intent": intent, "raw_response": response_text[:50]},
+    )
+
+    logger.info(f"Router classified intent: {intent}")
+
+    return {"intent": intent}
+
+
+async def simple_response_node(
+    state: OrchestratorState,
+    config: RunnableConfig,
+) -> dict:
+    """
+    Simple response node for handling non-restaurant queries.
+
+    This node generates responses for:
+    - Greetings and welcomes
+    - Thanks and acknowledgments
+    - Questions about the assistant's capabilities
+    - Off-topic redirections
+
+    No tools are invoked - just a direct LLM response.
+
+    Args:
+        state: The orchestrator state containing messages.
+        config: Runtime configuration with customer context.
+
+    Returns:
+        Updated state with the simple response.
+    """
+    observability = get_observability_manager()
+    start_time = time.time()
+
+    configurable = config.get("configurable", {})
+    customer_name = configurable.get("customer_name", "Guest")
+    intent = state.get("intent", "simple")
+
+    messages = list(state["messages"])
+
+    # Get the simple response chain
+    simple_chain = get_simple_response_chain(customer_name=customer_name)
+
+    with observability.create_span(
+        "simple_response.generate",
+        attributes={
+            "customer.name": customer_name,
+            "intent": intent,
+        },
+    ):
+        response = await simple_chain.ainvoke(
+            {"messages": messages},
+            config,
+        )
+
+    duration_ms = (time.time() - start_time) * 1000
+    observability.record_workflow_step(
+        step_name="simple_response",
+        step_type="node",
+        duration_ms=duration_ms,
+        success=True,
+        metadata={"intent": intent},
+    )
+
+    logger.debug(f"Simple response generated for intent: {intent}")
+
+    return {"messages": response}
 
 
 async def memory_post_hook(

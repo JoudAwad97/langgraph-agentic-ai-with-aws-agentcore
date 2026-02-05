@@ -1,10 +1,20 @@
 import re
 from typing import AsyncGenerator, Any, Union
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, AIMessageChunk
 from loguru import logger
 
 from src.application.orchestrator.workflow.graph import create_orchestrator_graph
+
+
+# Nodes that produce user-facing responses (for streaming)
+RESPONSE_NODES = {"search_agent_node", "simple_response_node"}
+
+# Nodes that should NOT have their output streamed (internal nodes)
+INTERNAL_NODES = {"router_node", "memory_post_hook"}
+
+# Event types to stream from
+STREAMABLE_EVENTS = {"on_chat_model_stream"}
 
 
 def _is_malformed_tool_content(content: str) -> bool:
@@ -36,6 +46,8 @@ def _is_malformed_tool_content(content: str) -> bool:
         "</tml",
         'name="restaurant_',
         'name="memory_',
+        "<tool_call>",
+        "</tool_call>",
     ]
 
     content_lower = content.lower()
@@ -99,25 +111,33 @@ async def get_streaming_response(
     messages: str | list[str],
     customer_name: str = "Guest",
     conversation_id: str | None = None,
+    enable_true_streaming: bool = True,
 ) -> AsyncGenerator[str, None]:
     """
-    Get response from the orchestrator workflow using buffer mode.
+    Get response from the workflow with Router + Search Agent pattern.
 
-    Buffer Mode:
-    - Runs the full ReAct workflow (Reasoning + Acting loop)
-    - Agent reasons, calls tools, observes results, and continues until ready
-    - Only yields the FINAL response after the ReAct loop completes
+    Supports two modes:
+    1. True Streaming (default): Streams tokens as they're generated
+       - Best for simple responses (greetings, etc.) - immediate feedback
+       - For search agent: streams final response tokens after tool calls complete
+    2. Buffer Mode: Waits for full completion, then streams in chunks
+       - Fallback mode if true streaming has issues
 
-    This ensures users only see the final response, avoiding confusing
-    intermediate outputs or partial content during tool execution.
+    Architecture:
+        Router → [Simple Response | Search Agent] → Memory Hook → END
+
+    The router classifies intent and routes to:
+    - simple_response_node: Direct response (streams immediately)
+    - search_agent_node: ReAct loop with tools (streams final response)
 
     Args:
         messages: User message(s) to process
         customer_name: Name of the customer for personalization
         conversation_id: Unique ID for the conversation thread (for memory persistence)
+        enable_true_streaming: Use token streaming (True) or buffer mode (False)
 
     Yields:
-        The final response content after ReAct loop completes
+        Response content tokens/chunks
     """
     graph = create_orchestrator_graph()
 
@@ -133,52 +153,232 @@ async def get_streaming_response(
             }
         }
 
-        logger.info(f"Starting ReAct workflow execution (thread_id={thread_id})")
+        input_data = {
+            "messages": __format_messages(messages=messages),
+            "customer_name": customer_name,
+        }
 
-        # Run the full ReAct workflow - waits for completion before returning
-        result = await graph.ainvoke(
-            input={
-                "messages": __format_messages(messages=messages),
-                "customer_name": customer_name,
-            },
-            config=config,
-        )
+        logger.info(f"Starting workflow execution (thread_id={thread_id}, streaming={enable_true_streaming})")
 
-        logger.info("ReAct workflow complete, extracting final response")
-
-        # Extract the final AI message from the result
-        final_response = ""
-        messages_list = result.get("messages", [])
-
-        # Find the last AI message that doesn't have tool calls (the actual response)
-        for msg in reversed(messages_list):
-            if isinstance(msg, AIMessage) and not getattr(msg, "tool_calls", None):
-                content = _extract_text_from_content(msg.content)
-                if content and not _is_malformed_tool_content(content):
-                    final_response = content
-                    break
-
-        if not final_response:
-            logger.warning("No valid final response found in workflow result")
-            final_response = "I apologize, but I wasn't able to generate a response. Please try again."
-
-        # Log ReAct completion metrics
-        tool_call_count = result.get("tool_call_count", 0)
-        logger.info(f"Final response ready: tool_calls={tool_call_count}")
-
-        # Yield the final response
-        # We yield in chunks to maintain SSE compatibility and allow frontend to process
-        chunk_size = 500  # Characters per chunk for smooth streaming effect
-        for i in range(0, len(final_response), chunk_size):
-            chunk = final_response[i:i + chunk_size]
-            yield chunk
-
-        logger.info(f"Response delivered: {len(final_response)} characters")
+        if enable_true_streaming:
+            # True streaming mode - stream tokens as they're generated
+            async for chunk in _stream_with_events(graph, input_data, config):
+                yield chunk
+        else:
+            # Buffer mode - wait for completion, then stream
+            async for chunk in _stream_buffered(graph, input_data, config):
+                yield chunk
 
     except Exception as e:
         logger.error(f"Error in get_streaming_response: {type(e).__name__}: {str(e)}")
         logger.exception("Full traceback:")
         raise RuntimeError(f"Error running conversation workflow: {str(e)}") from e
+
+
+async def _stream_with_events(
+    graph,
+    input_data: dict,
+    config: dict,
+) -> AsyncGenerator[str, None]:
+    """
+    Stream response tokens using LangGraph's astream_events.
+
+    This provides true token-by-token streaming for better UX.
+    Only streams from response nodes (search_agent_node, simple_response_node).
+    Explicitly excludes internal nodes (router_node, memory_post_hook).
+
+    For the search agent, we only stream the FINAL response (after tool calls),
+    not intermediate reasoning or tool call formatting.
+
+    Args:
+        graph: The compiled LangGraph workflow
+        input_data: Input state for the graph
+        config: Runtime configuration
+
+    Yields:
+        Response tokens as they're generated
+    """
+    # Track state for smart streaming
+    current_node = None
+    has_tool_calls_pending = False
+    streamed_content = []
+    final_state = None  # Track final state for fallback extraction
+    in_internal_node = False  # Track if we're in router or other internal nodes
+
+    try:
+        async for event in graph.astream_events(
+            input=input_data,
+            config=config,
+            version="v2",
+        ):
+            event_type = event.get("event")
+            event_name = event.get("name", "")
+            event_data = event.get("data", {})
+            tags = event.get("tags", [])
+
+            # Track which node we're in (both response and internal nodes)
+            if event_type == "on_chain_start":
+                if event_name in RESPONSE_NODES:
+                    current_node = event_name
+                    in_internal_node = False
+                    logger.debug(f"Entered response node: {current_node}")
+                elif event_name in INTERNAL_NODES:
+                    in_internal_node = True
+                    current_node = None
+                    logger.debug(f"Entered internal node: {event_name} (not streaming)")
+
+            elif event_type == "on_chain_end":
+                if event_name in RESPONSE_NODES:
+                    logger.debug(f"Exited response node: {event_name}")
+                    current_node = None
+                elif event_name in INTERNAL_NODES:
+                    in_internal_node = False
+                    logger.debug(f"Exited internal node: {event_name}")
+
+                # Capture final state when the main graph completes
+                output = event_data.get("output")
+                if output and isinstance(output, dict) and "messages" in output:
+                    final_state = output
+
+            # Stream tokens from the chat model
+            elif event_type == "on_chat_model_stream":
+                # Skip if we're in an internal node (router, memory_post_hook)
+                if in_internal_node:
+                    continue
+
+                chunk = event_data.get("chunk")
+
+                if chunk and isinstance(chunk, AIMessageChunk):
+                    # Check if this chunk has tool calls (don't stream tool call content)
+                    if chunk.tool_calls or chunk.tool_call_chunks:
+                        has_tool_calls_pending = True
+                        continue
+
+                    # Extract text content
+                    content = _extract_text_from_content(chunk.content)
+
+                    if content:
+                        # Filter out malformed tool content
+                        if _is_malformed_tool_content(content):
+                            continue
+
+                        # Check if we're in a response node via tags or current_node
+                        in_response_node = any(
+                            node in str(tags) for node in RESPONSE_NODES
+                        ) or current_node in RESPONSE_NODES
+
+                        # Also check tags don't contain internal nodes
+                        in_internal_via_tags = any(
+                            node in str(tags) for node in INTERNAL_NODES
+                        )
+
+                        # Only stream if:
+                        # 1. We're in a response node, AND
+                        # 2. We're not in an internal node, AND
+                        # 3. For search_agent, no pending tool calls (final response)
+                        should_stream = (
+                            in_response_node
+                            and not in_internal_via_tags
+                            and (current_node == "simple_response_node" or not has_tool_calls_pending)
+                        )
+
+                        if should_stream:
+                            streamed_content.append(content)
+                            yield content
+
+            # Reset tool call flag when tools complete
+            elif event_type == "on_chain_end" and "tool" in event_name.lower():
+                # Tool execution completed, next response from search_agent is final
+                has_tool_calls_pending = False
+
+        total_chars = sum(len(c) for c in streamed_content)
+        logger.info(f"Streaming complete: {total_chars} characters streamed")
+
+        # If nothing was streamed, extract from final state (avoid re-running workflow)
+        if not streamed_content and final_state:
+            logger.warning("No content streamed, extracting from final state")
+            final_response = _extract_final_response(final_state)
+            if final_response:
+                # Yield the extracted response in chunks
+                chunk_size = 500
+                for i in range(0, len(final_response), chunk_size):
+                    yield final_response[i:i + chunk_size]
+                logger.info(f"Fallback response delivered: {len(final_response)} characters")
+
+    except Exception as e:
+        logger.error(f"Error in streaming: {type(e).__name__}: {str(e)}")
+        # Fall back to buffer mode on streaming errors
+        logger.info("Falling back to buffer mode due to streaming error")
+        async for chunk in _stream_buffered(graph, input_data, config):
+            yield chunk
+
+
+def _extract_final_response(state: dict) -> str:
+    """
+    Extract the final response from a workflow state.
+
+    Args:
+        state: The workflow state containing messages
+
+    Returns:
+        The final response text, or empty string if not found
+    """
+    messages_list = state.get("messages", [])
+
+    # Find the last AI message that doesn't have tool calls
+    for msg in reversed(messages_list):
+        if isinstance(msg, AIMessage) and not getattr(msg, "tool_calls", None):
+            content = _extract_text_from_content(msg.content)
+            if content and not _is_malformed_tool_content(content):
+                return content
+
+    return ""
+
+
+async def _stream_buffered(
+    graph,
+    input_data: dict,
+    config: dict,
+) -> AsyncGenerator[str, None]:
+    """
+    Buffer mode: Run workflow to completion, then stream the final response.
+
+    This is the fallback mode that ensures we always return a response.
+
+    Args:
+        graph: The compiled LangGraph workflow
+        input_data: Input state for the graph
+        config: Runtime configuration
+
+    Yields:
+        Response content in chunks
+    """
+    logger.info("Running workflow in buffer mode")
+
+    # Run the full workflow - waits for completion
+    result = await graph.ainvoke(input=input_data, config=config)
+
+    logger.info("Workflow complete, extracting final response")
+
+    # Extract the final response using shared helper
+    final_response = _extract_final_response(result)
+
+    if not final_response:
+        logger.warning("No valid final response found in workflow result")
+        final_response = "I apologize, but I wasn't able to generate a response. Please try again."
+
+    # Log completion metrics
+    tool_call_count = result.get("tool_call_count", 0)
+    intent = result.get("intent", "unknown")
+    logger.info(f"Final response ready: intent={intent}, tool_calls={tool_call_count}")
+
+    # Yield in chunks for SSE compatibility
+    chunk_size = 500
+    for i in range(0, len(final_response), chunk_size):
+        chunk = final_response[i:i + chunk_size]
+        yield chunk
+
+    logger.info(f"Response delivered: {len(final_response)} characters")
 
 
 def __format_messages(

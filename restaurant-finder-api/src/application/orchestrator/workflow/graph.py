@@ -4,10 +4,15 @@ from loguru import logger
 
 from src.application.orchestrator.workflow.state import OrchestratorState
 from src.application.orchestrator.workflow.nodes import (
-    orchestrator_node,
+    router_node,
+    search_agent_node,
+    simple_response_node,
     memory_post_hook,
 )
-from src.application.orchestrator.workflow.edges import should_continue_orchestrator
+from src.application.orchestrator.workflow.edges import (
+    route_by_intent,
+    should_continue_search_agent,
+)
 from src.application.orchestrator.workflow.tools import get_orchestrator_tools
 from src.infrastructure.memory import ShortTermMemory
 
@@ -18,7 +23,7 @@ _graph_instance = None
 
 def create_orchestrator_graph(force_recreate: bool = False):
     """
-    Create the multi-agent orchestrator workflow graph with ReAct pattern.
+    Create the workflow graph with Router + Search Agent (ReAct pattern).
 
     Uses a module-level singleton pattern instead of @lru_cache to support
     dynamic tool loading based on configuration changes.
@@ -30,46 +35,63 @@ def create_orchestrator_graph(force_recreate: bool = False):
         force_recreate: If True, recreates the graph even if one exists.
                        Useful when configuration changes at runtime.
 
-    Architecture (Implicit ReAct Pattern):
+    Architecture (Router + Search Agent Pattern):
 
         START
           │
           ▼
     ┌───────────────┐
-    │  Orchestrator │◄──────────────┐
-    │   (Reason)    │               │
-    └───────┬───────┘               │
-            │                       │
-            ▼                       │
-    [has tool calls?]               │
-       │         │                  │
-    yes│         │no                │
-       │         │(respond)         │
-       ▼         │                  │
-    ┌─────────┐  │                  │
-    │ToolNode │  │                  │
-    │ (Act)   │  │                  │
-    └────┬────┘  │                  │
-         │       │                  │
-         │ (Observe)                │
-         └──────────────────────────┘
-                 │
-                 ▼ (when no tool calls)
-        ┌───────────────┐
-        │ Memory Post-  │
-        │    Hook       │
-        └───────┬───────┘
-                │
-                ▼
-               END
+    │    Router     │  (Intent Classification)
+    │   (Classify)  │
+    └───────┬───────┘
+            │
+            ▼
+    [route by intent]
+       │              │
+       │restaurant    │simple/off_topic
+       │_search       │
+       ▼              ▼
+    ┌───────────────┐  ┌───────────────┐
+    │ Search Agent  │  │Simple Response│
+    │   (ReAct)     │  │  (No Tools)   │
+    └───────┬───────┘  └───────┬───────┘
+            │                  │
+            ▼                  │
+    [has tool calls?]          │
+       │         │             │
+    yes│         │no           │
+       ▼         │             │
+    ┌─────────┐  │             │
+    │ToolNode │  │             │
+    │ (Act)   │  │             │
+    └────┬────┘  │             │
+         │       │             │
+         └───────┘             │
+                 │             │
+                 ▼             ▼
+            ┌───────────────────┐
+            │  Memory Post-Hook │
+            └─────────┬─────────┘
+                      │
+                      ▼
+                     END
 
-    ReAct Loop (Reasoning + Acting) - Implicit Implementation:
+    Router Node:
+    - Classifies intent: restaurant_search, simple, off_topic
+    - Routes to appropriate handler
+
+    Search Agent (for restaurant_search):
+    - Implements ReAct pattern (Reasoning + Acting)
     - Reasoning happens internally in the LLM (not exposed in output)
     - Acting is done via native tool calls (LangChain tool_calls)
-    - Observation is the tool result returned to the orchestrator
+    - Observation is the tool result returned to the agent
     - Loop continues until agent responds without tool calls
 
-    The orchestrator decides which sub-agent tools to call:
+    Simple Response Node (for simple/off_topic):
+    - Direct LLM response without tools
+    - Handles greetings, thanks, off-topic redirections
+
+    The search agent decides which tools to call:
     - restaurant_data_tool: MCP Gateway for structured restaurant data (always available)
     - restaurant_explorer_tool: Browser-based web search (if ENABLE_BROWSER_TOOLS=True)
     - restaurant_research_tool: Detailed restaurant research (if ENABLE_BROWSER_TOOLS=True)
@@ -84,12 +106,18 @@ def create_orchestrator_graph(force_recreate: bool = False):
     if _graph_instance is not None and not force_recreate:
         return _graph_instance
 
-    logger.info("Creating orchestrator graph (ReAct pattern)...")
+    logger.info("Creating workflow graph (Router + Search Agent pattern)...")
 
     graph_builder = StateGraph(OrchestratorState)
 
-    # Add the orchestrator node (implements ReAct reasoning)
-    graph_builder.add_node("orchestrator_node", orchestrator_node)
+    # Add the router node (intent classification)
+    graph_builder.add_node("router_node", router_node)
+
+    # Add the search agent node (implements ReAct reasoning for restaurant searches)
+    graph_builder.add_node("search_agent_node", search_agent_node)
+
+    # Add the simple response node (handles non-restaurant queries)
+    graph_builder.add_node("simple_response_node", simple_response_node)
 
     # Get tools dynamically based on current config (respects ENABLE_BROWSER_TOOLS)
     tools = get_orchestrator_tools()
@@ -100,23 +128,38 @@ def create_orchestrator_graph(force_recreate: bool = False):
     graph_builder.add_node("memory_post_hook", memory_post_hook)
 
     # Define edges
-    # START -> Orchestrator
-    graph_builder.add_edge(START, "orchestrator_node")
+    # START -> Router (intent classification)
+    graph_builder.add_edge(START, "router_node")
 
-    # Conditional edge from orchestrator - ReAct loop
-    # - If tool calls: route to tools, then back to orchestrator
+    # Conditional edge from router - route by intent
+    # - restaurant_search: route to search_agent (full ReAct with tools)
+    # - simple/off_topic: route to simple_response (no tools)
+    graph_builder.add_conditional_edges(
+        "router_node",
+        route_by_intent,
+        {
+            "search_agent": "search_agent_node",
+            "simple_response": "simple_response_node",
+        },
+    )
+
+    # Conditional edge from search agent - ReAct loop
+    # - If tool calls: route to tools, then back to search_agent
     # - If no tool calls (Final Answer): route to memory hook, then END
     graph_builder.add_conditional_edges(
-        "orchestrator_node",
-        should_continue_orchestrator,
+        "search_agent_node",
+        should_continue_search_agent,
         {
             "tools": "tool_node",
             "end": "memory_post_hook",
         },
     )
 
-    # After tools (Observation), return to orchestrator for next Thought/Action
-    graph_builder.add_edge("tool_node", "orchestrator_node")
+    # After tools (Observation), return to search agent for next Thought/Action
+    graph_builder.add_edge("tool_node", "search_agent_node")
+
+    # Simple response -> Memory Post-Hook
+    graph_builder.add_edge("simple_response_node", "memory_post_hook")
 
     # Memory Post-Hook -> END
     graph_builder.add_edge("memory_post_hook", END)
@@ -125,7 +168,7 @@ def create_orchestrator_graph(force_recreate: bool = False):
     checkpointer = ShortTermMemory().get_memory()
 
     _graph_instance = graph_builder.compile(checkpointer=checkpointer)
-    logger.info("Orchestrator graph (ReAct) created successfully")
+    logger.info("Workflow graph (Router + Search Agent) created successfully")
 
     return _graph_instance
 

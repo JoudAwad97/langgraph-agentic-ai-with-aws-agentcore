@@ -19,6 +19,7 @@ class ModelType(str, Enum):
     DEFAULT = "default"  # General purpose, backwards compatible
     ORCHESTRATOR = "orchestrator"  # Main agent, tool selection, conversations
     EXTRACTION = "extraction"  # Data extraction, JSON parsing
+    ROUTER = "router"  # Intent classification, routing decisions (lightweight)
 
 
 def _get_model_id_for_type(model_type: ModelType) -> str:
@@ -27,6 +28,7 @@ def _get_model_id_for_type(model_type: ModelType) -> str:
         ModelType.DEFAULT: settings.CONVERSATION_CHAT_MODEL_ID,
         ModelType.ORCHESTRATOR: settings.ORCHESTRATOR_MODEL_ID,
         ModelType.EXTRACTION: settings.EXTRACTION_MODEL_ID,
+        ModelType.ROUTER: settings.ROUTER_MODEL_ID,
     }
     return model_map.get(model_type, settings.CONVERSATION_CHAT_MODEL_ID)
 
