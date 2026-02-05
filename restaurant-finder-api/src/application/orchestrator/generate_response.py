@@ -234,6 +234,10 @@ async def _stream_with_events(
                 elif event_name in INTERNAL_NODES:
                     in_internal_node = False
                     logger.debug(f"Exited internal node: {event_name}")
+                elif "tool" in event_name.lower():
+                    # Tool execution completed, reset flag so next search_agent response streams
+                    has_tool_calls_pending = False
+                    logger.debug(f"Tool execution completed: {event_name}, reset pending flag")
 
                 # Capture final state when the main graph completes
                 output = event_data.get("output")
@@ -286,10 +290,6 @@ async def _stream_with_events(
                             streamed_content.append(content)
                             yield content
 
-            # Reset tool call flag when tools complete
-            elif event_type == "on_chain_end" and "tool" in event_name.lower():
-                # Tool execution completed, next response from search_agent is final
-                has_tool_calls_pending = False
 
         total_chars = sum(len(c) for c in streamed_content)
         logger.info(f"Streaming complete: {total_chars} characters streamed")
