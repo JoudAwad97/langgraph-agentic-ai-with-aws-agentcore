@@ -62,6 +62,16 @@ class Settings(BaseSettings):
         description="The AWS region where services are hosted.",
     )
 
+    # --- SearchAPI configurations ---
+    SEARCHAPI_KEY: str = Field(
+        default="",
+        description="API key for SearchAPI.io web search service.",
+    )
+    SEARCHAPI_BASE_URL: str = Field(
+        default="https://www.searchapi.io/api/v1/search",
+        description="Base URL for SearchAPI endpoint.",
+    )
+
     # --- AgentCore Gateway configurations ---
     GATEWAY_URL: str = Field(
         default="",
@@ -117,6 +127,20 @@ class Settings(BaseSettings):
         default="",
         description="CloudWatch log group for observability data. "
                     "If empty, defaults to /aws/bedrock-agentcore/runtimes/{service_name}",
+    )
+
+    # --- Evaluation configurations ---
+    EVALUATION_ENABLED: bool = Field(
+        default=True,
+        description="Enable AgentCore Evaluations for agent quality monitoring.",
+    )
+    EVALUATION_SAMPLING_RATE: int = Field(
+        default=10,
+        description="Percentage of sessions to evaluate in online mode (1-100).",
+    )
+    EVALUATION_OUTPUT_DIR: str = Field(
+        default="evaluation_results",
+        description="Directory for storing evaluation results.",
     )
 
 

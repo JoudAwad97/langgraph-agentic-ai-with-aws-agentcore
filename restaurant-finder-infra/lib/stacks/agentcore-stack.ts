@@ -4,6 +4,7 @@ import * as bedrockagentcore from "aws-cdk-lib/aws-bedrockagentcore";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as logs from "aws-cdk-lib/aws-logs";
+import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
 // import * as cr from "aws-cdk-lib/custom-resources"; // Uncomment if using custom resources
 // import * as xray from "aws-cdk-lib/aws-xray"; // Uncomment if re-enabling TransactionSearchConfig
 import { BaseStackProps } from "../types";
@@ -30,13 +31,30 @@ export class AgentCoreStack extends cdk.Stack {
      * AgentCore Gateway
      ******************************/
 
+    // Reference the SearchAPI secret (create manually in AWS Secrets Manager)
+    // Secret name: restaurant-finder/searchapi-key
+    // Secret value: {"api_key": "your-searchapi-key-here"}
+    const searchApiSecretName = `${props.appName}/searchapi-key`;
+    const searchApiSecret = secretsmanager.Secret.fromSecretNameV2(
+      this,
+      `${props.appName}-SearchApiSecret`,
+      searchApiSecretName,
+    );
+
     this.mcpLambda = new lambda.Function(this, `${props.appName}-McpLambda`, {
       runtime: lambda.Runtime.PYTHON_3_12,
       handler: "handler.lambda_handler",
       code: lambda.AssetCode.fromAsset(
         path.join(__dirname, "../../mcp/lambda"),
       ),
+      environment: {
+        SEARCHAPI_SECRET_NAME: searchApiSecretName,
+      },
+      timeout: cdk.Duration.seconds(30),
     });
+
+    // Grant Lambda permission to read the secret
+    searchApiSecret.grantRead(this.mcpLambda);
 
     const agentCoreGatewayRole = new iam.Role(
       this,
@@ -321,9 +339,7 @@ export class AgentCoreStack extends cdk.Stack {
             "bedrock-agentcore:GetBrowserSession",
             "bedrock-agentcore:SendBrowserCommand",
           ],
-          resources: [
-            `arn:aws:bedrock-agentcore:${region}:aws:browser/*`,
-          ],
+          resources: [`arn:aws:bedrock-agentcore:${region}:aws:browser/*`],
         }),
         // CloudWatch Logs Delivery API for application observability
         new iam.PolicyStatement({
@@ -439,19 +455,6 @@ export class AgentCoreStack extends cdk.Stack {
     // DEFAULT endpoint is automatically created by AgentCore and always points to the latest published version
     // No explicit endpoint creation needed - use the DEFAULT endpoint for always-latest behavior
     // https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/agent-runtime-versioning.html
-
-    /*****************************
-     * Runtime Tracing Configuration
-     ******************************/
-
-    // Tracing is enabled via the AgentCore console:
-    // 1. Open https://console.aws.amazon.com/bedrock-agentcore/agents
-    // 2. Select your runtime agent
-    // 3. In the "Tracing" section, click Edit and toggle to Enable
-    // Traces will then appear in the aws/spans log group and X-Ray console
-    //
-    // Note: CDK custom resources for CloudWatch Logs Delivery API have complex
-    // permission requirements that are better handled via console or CLI.
 
     /*****************************
      * Transaction Search Config

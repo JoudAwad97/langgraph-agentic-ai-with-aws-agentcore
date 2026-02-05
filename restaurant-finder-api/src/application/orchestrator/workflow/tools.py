@@ -68,11 +68,11 @@ async def restaurant_data_tool(
     limit: int = 5,
 ) -> str:
     """
-    Primary tool for restaurant searches. Fast, structured data from database.
-    Always try this first before using explorer_tool.
+    Primary tool for restaurant searches via SearchAPI web search.
+    Returns real restaurant data from the web. Always try this first.
 
     Args:
-        query: What restaurants to find.
+        query: What restaurants to find (e.g., "best pizza near Times Square").
         cuisine: Cuisine type (Italian, Japanese, etc.).
         location: City or area to search.
         price_range: "$", "$$", "$$$", or "$$$$".
@@ -80,7 +80,7 @@ async def restaurant_data_tool(
         limit: Max results (1-10).
 
     Returns:
-        JSON with restaurants including ratings, features, dietary options.
+        JSON with restaurants including ratings, addresses, contact info.
     """
     result: RestaurantSearchResult = await run_restaurant_data_agent(
         query=query,
@@ -206,7 +206,7 @@ async def restaurant_research_tool(
 
 # Core tools (always available)
 _CORE_TOOLS = [
-    restaurant_data_tool,       # MCP Gateway to Lambda (structured data)
+    restaurant_data_tool,       # MCP Gateway to Lambda (SearchAPI web search)
     memory_retrieval_tool,      # On-demand memory retrieval
 ]
 

@@ -149,7 +149,7 @@ def parse_restaurant(data: dict) -> Restaurant:
     Parse a dictionary into a Restaurant model.
 
     Args:
-        data: Dictionary containing restaurant data from Lambda.
+        data: Dictionary containing restaurant data from Lambda/SearchAPI.
 
     Returns:
         Restaurant: Parsed restaurant object with defaults for missing fields.
@@ -157,14 +157,31 @@ def parse_restaurant(data: dict) -> Restaurant:
     price_str = data.get("price_range", "$$")
     price_range = PRICE_RANGE_MAP.get(price_str, PriceRange.MODERATE)
 
+    # Handle rating - ensure it's a valid float
+    rating = data.get("rating", 0.0)
+    if isinstance(rating, str):
+        try:
+            rating = float(rating)
+        except ValueError:
+            rating = 0.0
+    rating = float(rating) if rating else 0.0
+
+    # Handle review count
+    review_count = data.get("review_count", 0)
+    if isinstance(review_count, str):
+        review_count = int("".join(filter(str.isdigit, review_count)) or "0")
+    review_count = int(review_count) if review_count else 0
+
     return Restaurant(
         name=data.get("name", "Unknown Restaurant"),
         cuisine_type=data.get("cuisine_type", "Various"),
-        rating=float(data.get("rating", 0.0)),
-        review_count=int(data.get("review_count", 0)),
+        rating=rating,
+        review_count=review_count,
         price_range=price_range,
         address=data.get("address", ""),
         city=data.get("city", ""),
+        phone=data.get("phone", ""),
+        website=data.get("website", ""),
         features=data.get("features", []),
         dietary_options=data.get("dietary_options", []),
         operating_hours=data.get("operating_hours", ""),
@@ -189,7 +206,7 @@ def parse_search_result(
     search_params: dict,
 ) -> RestaurantSearchResult:
     """
-    Parse Lambda response into RestaurantSearchResult.
+    Parse Lambda/SearchAPI response into RestaurantSearchResult.
 
     Args:
         response: Response from Lambda function (dict or other).
@@ -216,7 +233,7 @@ def parse_search_result(
             restaurants=[],
             search_location=search_params.get("location", ""),
             search_filters=search_filters,
-            data_source="mcp_gateway",
+            data_source="searchapi",
             notes=f"Unexpected response format: {str(response)[:200]}",
         )
 
@@ -238,14 +255,24 @@ def parse_search_result(
     total_found = result_data.get("total_found", len(restaurants))
     message = result_data.get("message", "")
 
+    # Include search query used if available
+    search_query_used = result_data.get("search_query_used", "")
+    if search_query_used:
+        message = f"{message} Search query: {search_query_used}"
+
+    # Check for errors in response
+    error = result_data.get("error", "")
+    if error:
+        message = f"{message} Error: {error}"
+
     return RestaurantSearchResult(
         query=query,
         total_results=total_found,
         restaurants=restaurants,
         search_location=search_params.get("location", ""),
         search_filters=search_filters,
-        data_source="mcp_gateway",
-        notes=message,
+        data_source="searchapi",
+        notes=message.strip(),
     )
 
 
@@ -262,10 +289,11 @@ async def run_restaurant_data_agent(
     limit: int = 5,
 ) -> RestaurantSearchResult:
     """
-    Search for restaurants via AgentCore Gateway MCP connection.
+    Search for restaurants via AgentCore Gateway MCP connection using SearchAPI.
 
     This agent connects to the AgentCore Gateway using MCP protocol,
-    which routes the request to a Lambda function that returns restaurant data.
+    which routes the request to a Lambda function that performs web searches
+    via SearchAPI to find real restaurant information.
 
     Args:
         query: Natural language search query for context.
@@ -279,7 +307,7 @@ async def run_restaurant_data_agent(
         limit: Maximum number of results (1-10).
 
     Returns:
-        RestaurantSearchResult: Structured search results from Lambda.
+        RestaurantSearchResult: Structured search results from SearchAPI.
     """
     # Check if MCP Gateway is configured
     if not is_mcp_configured():
@@ -290,14 +318,15 @@ async def run_restaurant_data_agent(
             restaurants=[],
             search_location=location or "",
             search_filters={},
-            data_source="mcp_gateway",
+            data_source="searchapi",
             notes="MCP Gateway not configured. Set GATEWAY_URL and Cognito credentials.",
         )
 
-    logger.info(f"Starting MCP restaurant search: '{query}'")
+    logger.info(f"Starting SearchAPI restaurant search: '{query}'")
 
-    # Build search parameters
+    # Build search parameters - include query for SearchAPI
     search_params = {
+        "query": query,
         "cuisine": cuisine or "",
         "location": location or "",
         "price_range": price_range or "$$",
@@ -308,16 +337,16 @@ async def run_restaurant_data_agent(
     logger.debug(f"Search parameters: {search_params}")
 
     try:
-        # Call the Lambda function via MCP Gateway
+        # Call the Lambda function via MCP Gateway (Lambda uses SearchAPI)
         response = await call_mcp_tool(SEARCH_RESTAURANTS_TOOL, search_params)
 
-        logger.info(f"MCP tool response received, type: {type(response).__name__}")
-        logger.debug(f"MCP tool full response: {json.dumps(response, indent=2) if isinstance(response, dict) else str(response)[:1000]}")
+        logger.info(f"SearchAPI tool response received, type: {type(response).__name__}")
+        logger.debug(f"SearchAPI tool full response: {json.dumps(response, indent=2) if isinstance(response, dict) else str(response)[:1000]}")
 
         # Parse response into structured result
         result = parse_search_result(response, query, search_params)
 
-        logger.info(f"Found {result.total_results} restaurants via MCP gateway")
+        logger.info(f"Found {result.total_results} restaurants via SearchAPI")
 
         return result
 
@@ -330,6 +359,6 @@ async def run_restaurant_data_agent(
             restaurants=[],
             search_location=search_params.get("location", ""),
             search_filters=_convert_to_string_dict(search_params),
-            data_source="mcp_gateway",
+            data_source="searchapi",
             notes=f"Search error: {str(e)}",
         )

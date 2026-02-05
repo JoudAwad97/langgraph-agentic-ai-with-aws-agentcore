@@ -1,6 +1,78 @@
 import json
-import random
+import os
+import urllib.request
+import urllib.parse
+import urllib.error
 from typing import Any, Dict, List
+
+import boto3
+from botocore.exceptions import ClientError
+
+# SearchAPI configuration
+SEARCHAPI_BASE_URL = "https://www.searchapi.io/api/v1/search"
+
+# Cache for the secret to avoid repeated API calls
+_cached_searchapi_key: str | None = None
+
+
+def _get_searchapi_key() -> str:
+    """
+    Retrieve the SearchAPI key from AWS Secrets Manager.
+
+    The secret is cached after the first retrieval to avoid repeated API calls
+    during the Lambda's warm start period.
+
+    Returns:
+        The SearchAPI key string.
+
+    Raises:
+        RuntimeError: If the secret cannot be retrieved.
+    """
+    global _cached_searchapi_key
+
+    if _cached_searchapi_key is not None:
+        return _cached_searchapi_key
+
+    secret_name = os.environ.get("SEARCHAPI_SECRET_NAME")
+
+    if not secret_name:
+        raise RuntimeError(
+            "SEARCHAPI_SECRET_NAME environment variable not set. "
+            "Please configure the secret in AWS Secrets Manager."
+        )
+
+    try:
+        client = boto3.client("secretsmanager")
+        response = client.get_secret_value(SecretId=secret_name)
+
+        # Parse the secret - supports both plain string and JSON format
+        secret_string = response["SecretString"]
+
+        # Try to parse as JSON first (e.g., {"api_key": "xxx"})
+        try:
+            secret_data = json.loads(secret_string)
+            if isinstance(secret_data, dict):
+                # Look for common key names
+                _cached_searchapi_key = (
+                    secret_data.get("api_key")
+                    or secret_data.get("SEARCHAPI_KEY")
+                    or secret_data.get("key")
+                    or secret_string  # Fallback to raw string
+                )
+            else:
+                _cached_searchapi_key = secret_string
+        except json.JSONDecodeError:
+            # Plain text secret
+            _cached_searchapi_key = secret_string
+
+        return _cached_searchapi_key
+
+    except ClientError as e:
+        error_code = e.response.get("Error", {}).get("Code", "Unknown")
+        raise RuntimeError(
+            f"Failed to retrieve SearchAPI key from Secrets Manager: {error_code}. "
+            f"Ensure the secret '{secret_name}' exists and Lambda has permission to read it."
+        )
 
 
 def lambda_handler(event, context):
@@ -49,60 +121,198 @@ def _response(status_code: int, body: Dict[str, Any]):
 
 
 # =============================================================================
+# SearchAPI Integration
+# =============================================================================
+
+def _call_searchapi(query: str, num_results: int = 10) -> Dict[str, Any]:
+    """
+    Call SearchAPI to perform a web search.
+
+    Args:
+        query: Search query string.
+        num_results: Number of results to request.
+
+    Returns:
+        SearchAPI response as a dictionary.
+    """
+    # Retrieve API key from Secrets Manager (cached after first call)
+    api_key = _get_searchapi_key()
+
+    params = {
+        "api_key": api_key,
+        "engine": "google",
+        "q": query,
+        "num": str(num_results),
+    }
+
+    url = f"{SEARCHAPI_BASE_URL}?{urllib.parse.urlencode(params)}"
+
+    try:
+        req = urllib.request.Request(url, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=30) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode("utf-8") if e.fp else ""
+        raise RuntimeError(f"SearchAPI HTTP error {e.code}: {error_body}")
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"SearchAPI connection error: {e.reason}")
+
+
+def _build_search_query(
+    query: str = "",
+    cuisine: str = "",
+    location: str = "",
+    price_range: str = "",
+    dietary_restrictions: List[str] = None,
+) -> str:
+    """
+    Build a search query string for restaurant searches.
+
+    Args:
+        query: Free-form search query.
+        cuisine: Type of cuisine.
+        location: City or area.
+        price_range: Price level indicator.
+        dietary_restrictions: List of dietary requirements.
+
+    Returns:
+        Formatted search query string.
+    """
+    parts = []
+
+    # Add the main query if provided
+    if query and query.strip():
+        parts.append(query.strip())
+
+    # Add cuisine
+    if cuisine and cuisine.strip():
+        parts.append(f"{cuisine.strip()} restaurants")
+    elif not query:
+        parts.append("restaurants")
+
+    # Add location
+    if location and location.strip():
+        parts.append(f"in {location.strip()}")
+
+    # Add price range context
+    price_descriptions = {
+        "$": "budget-friendly cheap",
+        "$$": "moderate mid-range",
+        "$$$": "upscale high-end",
+        "$$$$": "fine dining luxury",
+    }
+    if price_range and price_range in price_descriptions:
+        parts.append(price_descriptions[price_range])
+
+    # Add dietary restrictions
+    if dietary_restrictions:
+        if isinstance(dietary_restrictions, str):
+            dietary_restrictions = [d.strip() for d in dietary_restrictions.split(",") if d.strip()]
+        if dietary_restrictions:
+            parts.append(" ".join(dietary_restrictions))
+
+    return " ".join(parts)
+
+
+def _parse_search_results(
+    api_response: Dict[str, Any],
+    location: str,
+    cuisine: str,
+    price_range: str,
+    limit: int,
+) -> List[Dict[str, Any]]:
+    """
+    Parse SearchAPI response into restaurant-like objects.
+
+    Args:
+        api_response: Raw response from SearchAPI.
+        location: Search location for context.
+        cuisine: Cuisine type for context.
+        price_range: Price range for context.
+        limit: Maximum results to return.
+
+    Returns:
+        List of parsed restaurant dictionaries.
+    """
+    restaurants = []
+
+    # Extract organic results from SearchAPI response
+    organic_results = api_response.get("organic_results", [])
+
+    # Also check for local results (Google Maps style)
+    local_results = api_response.get("local_results", [])
+
+    # Combine and prioritize local results
+    all_results = local_results + organic_results
+
+    for idx, result in enumerate(all_results[:limit]):
+        # For local results (richer data)
+        if "title" in result or "name" in result:
+            name = result.get("title") or result.get("name", f"Restaurant {idx + 1}")
+
+            # Extract rating if available
+            rating = result.get("rating", 0.0)
+            if isinstance(rating, str):
+                try:
+                    rating = float(rating)
+                except ValueError:
+                    rating = 0.0
+
+            # Extract review count
+            reviews = result.get("reviews", 0)
+            if isinstance(reviews, str):
+                reviews = int("".join(filter(str.isdigit, reviews)) or "0")
+
+            # Extract address
+            address = result.get("address", result.get("snippet", ""))
+
+            # Extract type/cuisine
+            type_info = result.get("type", result.get("types", []))
+            if isinstance(type_info, list):
+                type_info = ", ".join(type_info[:3]) if type_info else cuisine or "Restaurant"
+            cuisine_type = type_info if type_info else cuisine or "Restaurant"
+
+            # Extract other available info
+            phone = result.get("phone", "")
+            hours = result.get("hours", result.get("operating_hours", ""))
+            website = result.get("link", result.get("website", ""))
+
+            restaurant = {
+                "name": name,
+                "cuisine_type": cuisine_type,
+                "rating": round(float(rating), 1) if rating else 0.0,
+                "review_count": int(reviews) if reviews else 0,
+                "price_range": result.get("price", price_range or "$$"),
+                "address": address[:200] if address else "",
+                "city": location.title() if location else "",
+                "neighborhood": result.get("neighborhood", ""),
+                "features": result.get("service_options", []),
+                "dietary_options": [],
+                "operating_hours": hours if isinstance(hours, str) else "",
+                "reservation_available": False,
+                "phone": phone,
+                "website": website,
+                "source": "searchapi",
+            }
+            restaurants.append(restaurant)
+
+    return restaurants
+
+
+# =============================================================================
 # Restaurant Search Tool
 # =============================================================================
 
-# Dummy data for generating restaurant responses
-CUISINES = [
-    "Italian", "Japanese", "Mexican", "Indian", "Thai", "Chinese",
-    "French", "Mediterranean", "American", "Korean", "Vietnamese", "Greek"
-]
-
-RESTAURANT_NAMES = {
-    "Italian": ["Bella Italia", "La Trattoria", "Pasta Paradise", "Roma Kitchen", "Olive Garden"],
-    "Japanese": ["Sakura Sushi", "Tokyo Ramen", "Zen Garden", "Wasabi House", "Ninja Grill"],
-    "Mexican": ["Casa del Sol", "El Mariachi", "Taco Fiesta", "Cantina Verde", "Aztec Kitchen"],
-    "Indian": ["Taj Mahal", "Curry House", "Spice Route", "Bombay Bistro", "Masala Magic"],
-    "Thai": ["Thai Orchid", "Bangkok Street", "Golden Temple", "Lotus Thai", "Siam Palace"],
-    "Chinese": ["Golden Dragon", "Wok & Roll", "Jade Palace", "Lucky Fortune", "Silk Road"],
-    "French": ["Le Petit Bistro", "Café Parisien", "Maison Rouge", "L'Escargot", "Brasserie Lyon"],
-    "Mediterranean": ["Olive Branch", "Sea Breeze", "Aegean Grill", "Mezze House", "Blue Coast"],
-    "American": ["The Grill House", "Liberty Diner", "Main Street Café", "Eagle's Nest", "Route 66"],
-    "Korean": ["Seoul Kitchen", "K-BBQ House", "Kimchi Corner", "Han River", "Bibimbap Bowl"],
-    "Vietnamese": ["Pho Paradise", "Saigon Street", "Lotus Leaf", "Mekong Kitchen", "Hanoi House"],
-    "Greek": ["Santorini Taverna", "Olympus Grill", "Acropolis Kitchen", "Athena's Table", "Mykonos Blue"],
-}
-
-FEATURES = [
-    "Outdoor Seating", "Private Dining", "Live Music", "Happy Hour",
-    "Delivery", "Takeout", "Reservations", "Full Bar", "Kid-Friendly",
-    "Pet-Friendly", "Wheelchair Accessible", "Free Wi-Fi", "Parking Available"
-]
-
-DIETARY_OPTIONS = [
-    "Vegetarian", "Vegan", "Gluten-Free", "Halal", "Kosher",
-    "Dairy-Free", "Nut-Free", "Low-Carb", "Organic"
-]
-
-CITIES = {
-    "new york": ["Manhattan", "Brooklyn", "Queens", "Bronx"],
-    "san francisco": ["Downtown", "Mission District", "North Beach", "SOMA"],
-    "los angeles": ["Hollywood", "Santa Monica", "Downtown LA", "Beverly Hills"],
-    "chicago": ["River North", "Wicker Park", "Lincoln Park", "Loop"],
-    "seattle": ["Capitol Hill", "Ballard", "Fremont", "Downtown"],
-    "default": ["Downtown", "Midtown", "Uptown", "Waterfront"]
-}
-
-
 def search_restaurants(event: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Search for restaurants based on provided criteria.
+    Search for restaurants using SearchAPI.
 
-    Generates dummy restaurant data matching the search parameters.
-    In production, this would query a real database or external API.
+    Performs a web search via SearchAPI and parses results into
+    structured restaurant data.
 
     Args:
         event: Search parameters
+            - query: Free-form search query
             - cuisine: Type of cuisine (e.g., "Italian", "Japanese")
             - location: City or area to search
             - price_range: Price level ("$", "$$", "$$$", "$$$$")
@@ -116,8 +326,9 @@ def search_restaurants(event: Dict[str, Any]) -> Dict[str, Any]:
             - search_params: Echo of search parameters used
     """
     # Extract parameters with defaults
+    query = event.get("query", "").strip()
     cuisine = event.get("cuisine", "").strip()
-    location = event.get("location", "").strip().lower()
+    location = event.get("location", "").strip()
     price_range = event.get("price_range", "$$")
     dietary_restrictions = event.get("dietary_restrictions", [])
     limit = min(int(event.get("limit", 5)), 10)  # Cap at 10
@@ -126,85 +337,63 @@ def search_restaurants(event: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(dietary_restrictions, str):
         dietary_restrictions = [d.strip() for d in dietary_restrictions.split(",") if d.strip()]
 
-    # Determine cuisine to use
-    if cuisine and cuisine in RESTAURANT_NAMES:
-        selected_cuisines = [cuisine]
-    elif cuisine:
-        # Fuzzy match cuisine
-        matched = [c for c in CUISINES if cuisine.lower() in c.lower()]
-        selected_cuisines = matched if matched else random.sample(CUISINES, min(3, len(CUISINES)))
-    else:
-        selected_cuisines = random.sample(CUISINES, min(3, len(CUISINES)))
+    # Build the search query
+    search_query = _build_search_query(
+        query=query,
+        cuisine=cuisine,
+        location=location,
+        price_range=price_range,
+        dietary_restrictions=dietary_restrictions,
+    )
 
-    # Get neighborhoods for location
-    neighborhoods = CITIES.get(location, CITIES["default"])
+    try:
+        # Call SearchAPI
+        api_response = _call_searchapi(search_query, num_results=limit * 2)
 
-    # Generate restaurants
-    restaurants = []
-    for i in range(limit):
-        cuisine_type = random.choice(selected_cuisines)
-        names = RESTAURANT_NAMES.get(cuisine_type, RESTAURANT_NAMES["American"])
+        # Parse the results
+        restaurants = _parse_search_results(
+            api_response=api_response,
+            location=location,
+            cuisine=cuisine,
+            price_range=price_range,
+            limit=limit,
+        )
 
-        # Generate realistic rating (weighted toward higher ratings)
-        rating = round(random.uniform(3.5, 5.0), 1)
-        review_count = random.randint(50, 2000)
+        # Sort by rating if available
+        restaurants.sort(key=lambda x: x.get("rating", 0), reverse=True)
 
-        # Select random features and dietary options
-        num_features = random.randint(3, 6)
-        num_dietary = random.randint(2, 4)
-
-        # Include requested dietary restrictions if any
-        restaurant_dietary = list(set(
-            dietary_restrictions[:2] +  # Include requested restrictions
-            random.sample(DIETARY_OPTIONS, min(num_dietary, len(DIETARY_OPTIONS)))
-        ))
-
-        restaurant = {
-            "name": random.choice(names) + (f" {random.choice(['East', 'West', 'North', 'Express', ''])}".strip() if random.random() > 0.5 else ""),
-            "cuisine_type": cuisine_type,
-            "rating": rating,
-            "review_count": review_count,
-            "price_range": price_range,
-            "address": f"{random.randint(100, 9999)} {random.choice(['Main', 'Oak', 'Maple', 'Broadway', 'First', 'Second'])} {random.choice(['St', 'Ave', 'Blvd'])}",
-            "city": location.title() if location else "New York",
-            "neighborhood": random.choice(neighborhoods),
-            "features": random.sample(FEATURES, min(num_features, len(FEATURES))),
-            "dietary_options": restaurant_dietary[:4],
-            "operating_hours": _generate_hours(),
-            "reservation_available": random.choice([True, True, True, False]),  # 75% have reservations
-            "phone": f"+1-{random.randint(200,999)}-{random.randint(200,999)}-{random.randint(1000,9999)}",
-            "distance_miles": round(random.uniform(0.1, 5.0), 1),
+        return {
+            "restaurants": restaurants,
+            "total_found": len(restaurants),
+            "search_params": {
+                "query": query,
+                "cuisine": cuisine or "any",
+                "location": location or "any",
+                "price_range": price_range,
+                "dietary_restrictions": dietary_restrictions,
+                "limit": limit,
+            },
+            "search_query_used": search_query,
+            "message": f"Found {len(restaurants)} restaurants matching your criteria via SearchAPI.",
         }
-        restaurants.append(restaurant)
 
-    # Sort by rating (highest first)
-    restaurants.sort(key=lambda x: x["rating"], reverse=True)
-
-    return {
-        "restaurants": restaurants,
-        "total_found": len(restaurants),
-        "search_params": {
-            "cuisine": cuisine or "any",
-            "location": location or "default",
-            "price_range": price_range,
-            "dietary_restrictions": dietary_restrictions,
-            "limit": limit,
-        },
-        "message": f"Found {len(restaurants)} restaurants matching your criteria.",
-    }
-
-
-def _generate_hours() -> str:
-    """Generate realistic operating hours string."""
-    patterns = [
-        "Mon-Fri 11:00 AM - 10:00 PM, Sat-Sun 10:00 AM - 11:00 PM",
-        "Daily 11:30 AM - 9:30 PM",
-        "Mon-Thu 12:00 PM - 10:00 PM, Fri-Sat 12:00 PM - 11:00 PM, Sun 12:00 PM - 9:00 PM",
-        "Tue-Sun 5:00 PM - 10:00 PM, Closed Mon",
-        "Daily 10:00 AM - 10:00 PM",
-        "Mon-Sat 11:00 AM - 11:00 PM, Sun 11:00 AM - 9:00 PM",
-    ]
-    return random.choice(patterns)
+    except Exception as e:
+        # Return error info but maintain expected structure
+        return {
+            "restaurants": [],
+            "total_found": 0,
+            "search_params": {
+                "query": query,
+                "cuisine": cuisine or "any",
+                "location": location or "any",
+                "price_range": price_range,
+                "dietary_restrictions": dietary_restrictions,
+                "limit": limit,
+            },
+            "search_query_used": search_query,
+            "message": f"Search failed: {str(e)}",
+            "error": str(e),
+        }
 
 
 # =============================================================================

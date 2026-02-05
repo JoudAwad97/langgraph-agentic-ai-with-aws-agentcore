@@ -1,10 +1,14 @@
 [
   {
     "name": "search_restaurants",
-    "description": "Search for restaurants based on cuisine, location, price range, and dietary restrictions. Returns a list of matching restaurants with details like ratings, features, and hours.",
+    "description": "Search for restaurants using SearchAPI. Performs web searches to find real restaurant information including ratings, addresses, and contact details. Returns a list of matching restaurants.",
     "inputSchema": {
       "type": "object",
       "properties": {
+        "query": {
+          "type": "string",
+          "description": "Free-form search query for restaurants (e.g., \"best pizza near Times Square\", \"romantic dinner spot\")"
+        },
         "cuisine": {
           "type": "string",
           "description": "Type of cuisine (e.g., \"Italian\", \"Japanese\", \"Mexican\", \"Indian\", \"Thai\")"
