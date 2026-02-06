@@ -1,7 +1,7 @@
 [
   {
     "name": "search_restaurants",
-    "description": "Search for restaurants using SearchAPI. Performs web searches to find real restaurant information including ratings, addresses, and contact details. Returns a list of matching restaurants.",
+    "description": "Search for restaurants by location, cuisine, price range, and dietary needs. Returns structured results with ratings, addresses, and contact details.",
     "inputSchema": {
       "type": "object",
       "properties": {

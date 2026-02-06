@@ -29,18 +29,18 @@ export class AgentCoreStack extends cdk.Stack {
      * AgentCore Gateway
      ******************************/
 
-    // Create the SearchAPI secret with the JSON structure the Lambda expects.
-    // After deployment, update the secret value with your actual SearchAPI key:
-    //   aws secretsmanager put-secret-value --secret-id <appName>/searchapi-key \
+    // Secret for the restaurant search API key used by the MCP Lambda.
+    // After deployment, update with your key:
+    //   aws secretsmanager put-secret-value --secret-id <appName>/restaurant-search-key \
     //     --secret-string '{"api_key":"your-actual-key"}'
-    const searchApiSecretName = `${props.appName}/searchapi-key`;
-    const searchApiSecret = new secretsmanager.Secret(
+    const searchSecretName = `${props.appName}/restaurant-search-key`;
+    const searchSecret = new secretsmanager.Secret(
       this,
-      `${props.appName}-SearchApiSecret`,
+      `${props.appName}-SearchSecret`,
       {
-        secretName: searchApiSecretName,
+        secretName: searchSecretName,
         description:
-          "SearchAPI key for restaurant search Lambda. Update with your actual key after deployment.",
+          "API key for restaurant search. Update with your key after deployment.",
         secretObjectValue: {
           api_key: cdk.SecretValue.unsafePlainText(""),
         },
@@ -54,13 +54,12 @@ export class AgentCoreStack extends cdk.Stack {
         path.join(__dirname, "../../mcp/lambda"),
       ),
       environment: {
-        SEARCHAPI_SECRET_NAME: searchApiSecretName,
+        SEARCH_SECRET_NAME: searchSecretName,
       },
       timeout: cdk.Duration.seconds(30),
     });
 
-    // Grant Lambda permission to read the secret
-    searchApiSecret.grantRead(this.mcpLambda);
+    searchSecret.grantRead(this.mcpLambda);
 
     const agentCoreGatewayRole = new iam.Role(
       this,
@@ -539,12 +538,10 @@ export class AgentCoreStack extends cdk.Stack {
       exportName: `${props.appName}-GatewayArn`,
     });
 
-    // Secret outputs
-    new cdk.CfnOutput(this, "SearchApiSecretArn", {
-      value: searchApiSecret.secretArn,
-      description:
-        "SearchAPI Secret ARN — update this secret with your API key after deployment",
-      exportName: `${props.appName}-SearchApiSecretArn`,
+    new cdk.CfnOutput(this, "SearchSecretArn", {
+      value: searchSecret.secretArn,
+      description: "Search API secret ARN",
+      exportName: `${props.appName}-SearchSecretArn`,
     });
 
     // Additional Memory outputs
