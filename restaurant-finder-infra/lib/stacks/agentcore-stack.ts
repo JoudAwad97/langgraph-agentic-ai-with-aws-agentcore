@@ -553,5 +553,13 @@ export class AgentCoreStack extends cdk.Stack {
       description: "AgentCore Memory ARN",
       exportName: `${props.appName}-MemoryArn`,
     });
+
+    // Runtime role ARN (needed by deploy-image workflow to call update-agent-runtime)
+    new cdk.CfnOutput(this, "RuntimeRoleArn", {
+      value: runtimeRole.roleArn,
+      description:
+        "AgentCore Runtime Role ARN (needed for update-agent-runtime)",
+      exportName: `${props.appName}-RuntimeRoleArn`,
+    });
   }
 }

@@ -4,17 +4,17 @@ on:
   workflow_dispatch:
     inputs:
       confirm_destroy:
-        description: 'Type "DESTROY" to confirm stack deletion'
+        description: 'Type "DESTROY" to confirm'
         required: true
         type: string
       stack_name:
-        description: "Stack to destroy (leave empty for all)"
+        description: "Target stack"
         required: false
         type: choice
         options:
           - "--all"
           - "restaurantFinder-AgentCoreStack"
-          - "restaurantFinder-DockerImageStack"
+          - "restaurantFinder-EcrStack"
 
 env:
   AWS_REGION: us-east-2
@@ -22,7 +22,7 @@ env:
 
 jobs:
   destroy:
-    name: Destroy CDK Stack
+    name: CDK Destroy
     runs-on: ubuntu-latest
     if: github.event.inputs.confirm_destroy == 'DESTROY'
     permissions:
@@ -30,50 +30,38 @@ jobs:
       contents: read
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: "npm"
+          cache: npm
           cache-dependency-path: restaurant-finder-infra/package-lock.json
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: ${{ env.AWS_REGION }}
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
-      - name: Install CDK dependencies
+      - name: Install dependencies
         working-directory: restaurant-finder-infra
-        run: |
-          npm ci
-          npm install -g aws-cdk
+        run: npm ci && npm install -g aws-cdk
 
-      - name: CDK Destroy
+      - name: Destroy
         working-directory: restaurant-finder-infra
-        run: |
-          echo "Destroying stack: ${{ github.event.inputs.stack_name }}"
-          npx cdk destroy ${{ github.event.inputs.stack_name }} --force
+        run: npx cdk destroy ${{ github.event.inputs.stack_name }} --force
 
-      - name: Cleanup Summary
+      - name: Summary
         run: |
-          echo "## Stack Destroyed" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Stack(s) destroyed: ${{ github.event.inputs.stack_name }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Triggered by: @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "Destroyed: ${{ github.event.inputs.stack_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "By: @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
 
   reject:
-    name: Destroy Rejected
+    name: Rejected
     runs-on: ubuntu-latest
     if: github.event.inputs.confirm_destroy != 'DESTROY'
     steps:
-      - name: Reject
-        run: |
-          echo "Destroy rejected - confirmation text did not match 'DESTROY'"
-          echo "You entered: '${{ github.event.inputs.confirm_destroy }}'"
+      - run: |
+          echo "Confirmation did not match. Got: '${{ github.event.inputs.confirm_destroy }}'"
           exit 1

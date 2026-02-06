@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 import * as cdk from "aws-cdk-lib";
 import { BaseStackProps } from "../lib/types";
-import { DockerImageStack, AgentCoreStack } from "../lib/stacks";
+import { EcrStack, AgentCoreStack } from "../lib/stacks";
 
 const app = new cdk.App();
 
-// Check for existing image URI to skip Docker build
-// Usage: npx cdk deploy restaurantFinder-AgentCoreStack -c imageUri=<existing-uri>
-const existingImageUri = app.node.tryGetContext("imageUri") as string | undefined;
+// Override image URI via context variable:
+//   npx cdk deploy --all -c imageUri=<account>.dkr.ecr.<region>.amazonaws.com/restaurantfinder-agent:<tag>
+const existingImageUri = app.node.tryGetContext("imageUri") as
+  | string
+  | undefined;
 
 const deploymentProps: BaseStackProps = {
   appName: "restaurantFinder",
@@ -26,35 +28,31 @@ const deploymentProps: BaseStackProps = {
   /* For more information, see https://docs.aws.amazon.com/cdk/latest/guide/environments.html */
 };
 
+// ECR repository is always created as infrastructure
+const ecrStack = new EcrStack(
+  app,
+  `restaurantFinder-EcrStack`,
+  deploymentProps,
+);
+
+// Determine image URI:
+// - If provided via context (-c imageUri=...), use that specific image
+// - Otherwise, default to the ECR repo with :latest tag
+const imageUri = existingImageUri || `${ecrStack.repositoryUri}:latest`;
+
 if (existingImageUri) {
-  // Skip Docker build - use existing image URI
-  // This is useful for iterating on infrastructure without rebuilding the image
-  console.log(`Using existing image URI: ${existingImageUri}`);
-
-  new AgentCoreStack(
-    app,
-    `restaurantFinder-AgentCoreStack`,
-    {
-      ...deploymentProps,
-      imageUri: existingImageUri,
-    },
-  );
+  console.log(`Using provided image URI: ${existingImageUri}`);
 } else {
-  // Build Docker image and deploy both stacks
-  const dockerImageStack = new DockerImageStack(
-    app,
-    `restaurantFinder-DockerImageStack`,
-    deploymentProps,
-  );
-
-  const agentCoreStack = new AgentCoreStack(
-    app,
-    `restaurantFinder-AgentCoreStack`,
-    {
-      ...deploymentProps,
-      imageUri: dockerImageStack.imageUri,
-    },
-  );
-
-  agentCoreStack.addDependency(dockerImageStack);
+  console.log(`Using default ECR image URI: ${imageUri}`);
 }
+
+const agentCoreStack = new AgentCoreStack(
+  app,
+  `restaurantFinder-AgentCoreStack`,
+  {
+    ...deploymentProps,
+    imageUri: imageUri,
+  },
+);
+
+agentCoreStack.addDependency(ecrStack);
