@@ -1,5 +1,5 @@
 import re
-from typing import AsyncGenerator, Any, Union
+from typing import AsyncGenerator, Any
 
 from langchain_core.messages import AIMessage, HumanMessage, AIMessageChunk
 from loguru import logger
@@ -12,9 +12,6 @@ RESPONSE_NODES = {"search_agent_node", "simple_response_node"}
 
 # Nodes that should NOT have their output streamed (internal nodes)
 INTERNAL_NODES = {"router_node", "memory_post_hook"}
-
-# Event types to stream from
-STREAMABLE_EVENTS = {"on_chat_model_stream"}
 
 
 def _is_malformed_tool_content(content: str) -> bool:
@@ -382,8 +379,8 @@ async def _stream_buffered(
 
 
 def __format_messages(
-    messages: Union[str, list[dict[str, Any]]],
-) -> list[Union[HumanMessage, AIMessage]]:
+    messages: str | list[dict[str, Any]],
+) -> list[HumanMessage | AIMessage]:
     """Convert various message formats to a list of LangChain message objects.
 
     Args:

@@ -6,23 +6,10 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
-        extra="ignore",  # Ignore extra env variables not defined in the model
-    )
-
-    # --- RAG configurations ---
-    RAG_TEXT_EMBEDDING_MODEL_ID: str = Field(
-        default="amazon.titan-embed-text-v2:0",
-        description="The model ID for text embeddings used in RAG.",
+        extra="ignore",
     )
 
     # --- Model configurations ---
-    # Default model for general use (backwards compatibility)
-    CONVERSATION_CHAT_MODEL_ID: str = Field(
-        default="us.anthropic.claude-3-5-haiku-20241022-v1:0",
-        description="Default model ID for chat conversations (using US inference profile).",
-    )
-
-    # Specialized model configurations for different components
     ORCHESTRATOR_MODEL_ID: str = Field(
         default="us.anthropic.claude-3-5-haiku-20241022-v1:0",
         description="Model for main orchestrator (tool selection, conversation management).",
@@ -66,16 +53,6 @@ class Settings(BaseSettings):
         description="The AWS region where services are hosted.",
     )
 
-    # --- SearchAPI configurations ---
-    SEARCHAPI_KEY: str = Field(
-        default="",
-        description="API key for SearchAPI.io web search service.",
-    )
-    SEARCHAPI_BASE_URL: str = Field(
-        default="https://www.searchapi.io/api/v1/search",
-        description="Base URL for SearchAPI endpoint.",
-    )
-
     # --- AgentCore Gateway configurations ---
     GATEWAY_URL: str = Field(
         default="",
@@ -93,29 +70,7 @@ class Settings(BaseSettings):
     # --- AgentCore Memory configurations ---
     MEMORY_ID: str = Field(
         default="",
-        description="The AgentCore Memory ID. If provided, skips create_or_get_memory for faster initialization.",
-    )
-    AWS_ACCESS_KEY_ID: str = Field(
-        default="your-access-key-id",
-        description="The AWS access key ID for authentication.",
-    )
-    AWS_SECRET_ACCESS_KEY: str = Field(
-        default="your-secret-access-key",
-        description="The AWS secret access key for authentication.",
-    )
-
-    # --- S3 Bucket configurations ---
-    S3_VECTOR_STORE_BUCKET: str = Field(
-        default="restaurant-finder-vector-store-bucket",
-        description="The name of the S3 bucket for storing restaurant data.",
-    )
-    S3_VECTOR_STORE_INDEX_NAME: str = Field(
-        default="restaurant-finder-vector-store-index",
-        description="The name of the S3 vector store index for restaurants.",
-    )
-    RAW_DOCUMENT_STORE_BUCKET: str = Field(
-        default="restaurant-finder-raw-document-store-bucket",
-        description="The name of the S3 bucket for storing restaurant documents.",
+        description="The AgentCore Memory ID. Must be set from CDK stack output.",
     )
 
     # --- Observability configurations ---
@@ -126,11 +81,6 @@ class Settings(BaseSettings):
     OTEL_SERVICE_NAME: str = Field(
         default="restaurant-finder-agent",
         description="Service name for OpenTelemetry tracing attribution.",
-    )
-    OTEL_LOG_GROUP: str = Field(
-        default="",
-        description="CloudWatch log group for observability data. "
-                    "If empty, defaults to /aws/bedrock-agentcore/runtimes/{service_name}",
     )
 
     # --- Evaluation configurations ---

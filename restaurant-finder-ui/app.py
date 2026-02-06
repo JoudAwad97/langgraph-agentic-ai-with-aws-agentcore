@@ -12,17 +12,16 @@ def strip_thinking_tags(text: str) -> str:
     """Remove <thinking>...</thinking> tags and their content from text."""
     return re.sub(r'<thinking>.*?</thinking>\s*', '', text, flags=re.DOTALL)
 
-# AgentCore API endpoint - can be configured via environment variable
 AGENTCORE_API_URL = os.environ.get("AGENTCORE_API_URL", "http://localhost:8080/invocations")
 
 
 @cl.on_settings_update
 async def settings_update(settings):
     """Handle settings updates."""
-    cl.user_session.set("customer_name", settings.get("customer_name", "Jhon Doe"))
+    cl.user_session.set("customer_name", settings.get("customer_name", "Guest"))
 
     await cl.Message(
-        content=f"Settings updated! Welcome, {settings.get('customer_name', 'Jhon Doe')}! Ready to find your perfect restaurant."
+        content=f"Settings updated! Welcome, {settings.get('customer_name', 'Guest')}! Ready to find your perfect restaurant."
     ).send()
 
 
@@ -36,20 +35,20 @@ async def on_chat_start():
                 id="customer_name",
                 label="Your Name",
                 placeholder="Enter your name",
-                initial="Jhon Doe"
+                initial="Guest"
             ),
         ]
     ).send()
 
     # Store initial settings in session
-    cl.user_session.set("customer_name", settings.get("customer_name", "Jhon Doe"))
+    cl.user_session.set("customer_name", settings.get("customer_name", "Guest"))
 
     # Generate unique conversation ID for this session
     conversation_id = str(uuid.uuid4())
     cl.user_session.set("conversation_id", conversation_id)
 
     # Send welcome message with customer name
-    customer_name = settings.get("customer_name", "Jhon Doe")
+    customer_name = settings.get("customer_name", "Guest")
     await cl.Message(
         content=f"Welcome, {customer_name}! I'm your restaurant finder assistant. What kind of dining experience are you looking for today?\n\n*Tip: Click the settings icon to update your profile.*"
     ).send()
@@ -59,7 +58,7 @@ async def on_chat_start():
 async def on_message(message: cl.Message):
     """Handle incoming messages by calling the AgentCore API."""
     # Get customer context from session
-    customer_name = cl.user_session.get("customer_name", "Jhon Doe")
+    customer_name = cl.user_session.get("customer_name", "Guest")
     conversation_id = cl.user_session.get("conversation_id")
 
     # Create a message placeholder for streaming
@@ -91,7 +90,7 @@ async def on_message(message: cl.Message):
 
                 # Stream chunks as they arrive
                 async for chunk_bytes in response.content.iter_any():
-                    line_buffer += chunk_bytes.decode("utf-8")
+                    line_buffer += chunk_bytes.decode("utf-8", errors="replace")
 
                     # Process complete lines
                     while "\n" in line_buffer:
@@ -161,21 +160,13 @@ async def on_message(message: cl.Message):
         msg.content = error_msg
         await msg.update()
 
-    except aiohttp.ClientError as e:
-        error_msg = f"Connection Error: Could not connect to AgentCore API at {AGENTCORE_API_URL}. Make sure the API is running."
-        msg.content = error_msg
+    except aiohttp.ClientError:
+        msg.content = "Connection Error: Could not connect to the API. Please try again later."
         await msg.update()
 
-    except Exception as e:
-        error_msg = f"Error: {str(e)}"
-        msg.content = error_msg
+    except Exception:
+        msg.content = "An unexpected error occurred. Please try again."
         await msg.update()
-
-
-@cl.on_chat_end
-async def on_chat_end():
-    """Clean up when chat ends."""
-    pass
 
 
 if __name__ == "__main__":

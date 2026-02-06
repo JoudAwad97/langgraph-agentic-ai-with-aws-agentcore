@@ -15,9 +15,54 @@ from typing import Optional
 from datetime import datetime
 
 from bedrock_agentcore_starter_toolkit import Evaluation
+from bedrock_agentcore_starter_toolkit.operations.observability.query_builder import (
+    CloudWatchQueryBuilder,
+)
 from loguru import logger
 
 from src.config import settings
+
+
+def _patch_span_query_builder() -> None:
+    """Patch the SDK's span query to skip the cloud.resource_id filter.
+
+    The SDK filters spans by parsing ``resource.attributes.cloud.resource_id``
+    to extract the agent ID.  However, AgentCore runtimes that use the
+    ``aws-opentelemetry-distro`` auto-instrumentation do not emit that
+    attribute, so the filter drops every span and the evaluation fails
+    with "No spans found".
+
+    This patch replaces the session query so it only filters by
+    ``attributes.session.id`` (which *is* present on every span).
+    """
+
+    @staticmethod
+    def _build(session_id: str, agent_id: str = "") -> str:
+        return f"""fields @timestamp,
+               @message,
+               traceId,
+               spanId,
+               name as spanName,
+               kind,
+               status.code as statusCode,
+               status.message as statusMessage,
+               durationNano/1000000 as durationMs,
+               attributes.session.id as sessionId,
+               startTimeUnixNano,
+               endTimeUnixNano,
+               parentSpanId,
+               events,
+               resource.attributes.service.name as serviceName,
+               resource.attributes.cloud.resource_id as resourceId,
+               attributes.aws.remote.service as serviceType
+        | filter attributes.session.id = '{session_id}'
+        | sort startTimeUnixNano asc"""
+
+    CloudWatchQueryBuilder.build_spans_by_session_query = _build  # type: ignore[assignment]
+
+
+# Apply the patch at import time so every evaluation run picks it up.
+_patch_span_query_builder()
 
 
 # Built-in evaluators available in AgentCore Evaluations
@@ -39,9 +84,9 @@ BUILTIN_EVALUATORS = [
 
 # Custom evaluator configurations for the restaurant finder
 CUSTOM_EVALUATOR_CONFIGS = {
-    "response_quality": "metrics/response_quality.json",
-    "recommendation_quality": "metrics/restaurant_recommendation_quality.json",
-    "safety_compliance": "metrics/safety_compliance.json",
+    "response_quality": "response_quality.json",
+    "recommendation_quality": "restaurant_recommendation_quality.json",
+    "safety_compliance": "safety_compliance.json",
 }
 
 

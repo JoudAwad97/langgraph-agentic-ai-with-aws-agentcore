@@ -22,7 +22,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-import boto3
 from loguru import logger
 
 from src.config import settings
@@ -221,7 +220,7 @@ def print_evaluation_report(
 
     print("=" * 70 + "\n")
 
-
+# In real production, you should save these results into an S3 Bucket
 def save_results_json(
     results: list[EvaluationResult],
     metrics: AggregatedMetrics,

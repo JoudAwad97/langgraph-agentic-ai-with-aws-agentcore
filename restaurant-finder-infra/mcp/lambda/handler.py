@@ -105,9 +105,6 @@ def lambda_handler(event, context):
         if tool_name == "search_restaurants":
             result = search_restaurants(event)
             return _response(200, {"result": result})
-        elif tool_name == "placeholder_tool":
-            result = placeholder_tool(event)
-            return _response(200, {"result": result})
         else:
             return _response(400, {"error": f"Unknown tool '{tool_name}'"})
 
@@ -530,21 +527,3 @@ def search_restaurants(event: Dict[str, Any]) -> Dict[str, Any]:
 
     return result
 
-
-# =============================================================================
-# Placeholder Tool (for testing)
-# =============================================================================
-
-def placeholder_tool(event: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    No-op placeholder tool for testing gateway connectivity.
-
-    Demonstrates argument passing from AgentCore Gateway.
-    """
-    return {
-        "message": "Placeholder tool executed.",
-        "string_param": event.get("string_param"),
-        "int_param": event.get("int_param"),
-        "float_array_param": event.get("float_array_param"),
-        "event_args_received": event,
-    }

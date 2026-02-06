@@ -8,13 +8,10 @@ and observability before the application starts accepting requests.
 from loguru import logger
 
 from src.config import settings
-from src.infrastructure.memory import ShortTermMemory
 from src.infrastructure.guardrails import get_guardrail_manager
 from src.infrastructure.observability import initialize_observability
 
 
-# Singleton instances initialized at startup
-_memory_instance: ShortTermMemory | None = None
 _startup_complete: bool = False
 
 
@@ -32,7 +29,7 @@ async def initialize_infrastructure() -> dict:
     Returns:
         Dictionary with initialization status for each component.
     """
-    global _memory_instance, _startup_complete
+    global _startup_complete
 
     if _startup_complete:
         logger.debug("Infrastructure already initialized, skipping")
@@ -106,20 +103,6 @@ async def initialize_infrastructure() -> dict:
     logger.info("Infrastructure initialization complete")
 
     return results
-
-
-def get_memory_instance() -> ShortTermMemory:
-    """
-    Get the initialized memory instance.
-
-    Raises:
-        RuntimeError: If memory has not been initialized.
-    """
-    if _memory_instance is None:
-        raise RuntimeError(
-            "Memory not initialized. Call initialize_infrastructure() first."
-        )
-    return _memory_instance
 
 
 def is_initialized() -> bool:

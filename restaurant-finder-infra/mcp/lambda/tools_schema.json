@@ -35,30 +35,5 @@
       },
       "required": []
     }
-  },
-  {
-    "name": "placeholder_tool",
-    "description": "No-op tool that demonstrates passing arguments",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "string_param": {
-          "type": "string",
-          "description": "Example string parameter"
-        },
-        "int_param": {
-          "type": "integer",
-          "description": "Example integer parameter"
-        },
-        "float_array_param": {
-          "type": "array",
-          "description": "Example float array parameter",
-          "items": {
-            "type": "number"
-          }
-        }
-      },
-      "required": []
-    }
   }
 ]

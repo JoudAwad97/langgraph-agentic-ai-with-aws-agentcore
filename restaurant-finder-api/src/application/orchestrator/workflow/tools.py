@@ -127,11 +127,7 @@ async def memory_retrieval_tool(
     actor_id = configurable.get("actor_id", "user:default")
     session_id = configurable.get("thread_id", "default_session")
 
-    logger.info(f"=== MEMORY RETRIEVAL TOOL INVOKED ===")
-    logger.info(f"  Query: '{query}'")
-    logger.info(f"  Memory types requested: {memory_types}")
-    logger.info(f"  Actor ID: {actor_id}")
-    logger.info(f"  Session ID: {session_id}")
+    logger.debug(f"Memory retrieval: query='{query}', types={memory_types}, actor={actor_id}")
 
     try:
         memory = _get_memory_instance()
@@ -149,17 +145,15 @@ async def memory_retrieval_tool(
             formatted_results[mem_type] = [
                 item.get("content", str(item)) for item in items
             ]
-            logger.info(f"  Retrieved {len(items)} items for '{mem_type}'")
+            logger.debug(f"Retrieved {len(items)} items for '{mem_type}'")
 
         result_json = json.dumps(formatted_results, indent=2)
 
-        logger.info(f"=== MEMORY RETRIEVAL COMPLETE ===")
-        logger.debug(f"Memory retrieval results: {result_json}")
+        logger.debug(f"Memory retrieval complete: {len(result_json)} chars")
         return result_json
 
     except Exception as e:
-        logger.error(f"=== MEMORY RETRIEVAL FAILED ===")
-        logger.error(f"  Error: {e}")
+        logger.error(f"Memory retrieval failed: {e}")
         return json.dumps({"error": str(e), "preferences": [], "facts": [], "summaries": []})
 
 
@@ -192,10 +186,7 @@ async def restaurant_research_tool(
     configurable = config.get("configurable", {}) if config else {}
     thread_id = configurable.get("thread_id") or str(uuid.uuid4())
 
-    logger.info(f"=== RESTAURANT RESEARCH TOOL INVOKED ===")
-    logger.info(f"  Restaurant: '{restaurant_name}'")
-    logger.info(f"  Location: '{location}'")
-    logger.info(f"  Topics: {research_topics}")
+    logger.debug(f"Restaurant research: name='{restaurant_name}', location='{location}', topics={research_topics}")
 
     try:
         result = await run_restaurant_research(
@@ -205,12 +196,11 @@ async def restaurant_research_tool(
             thread_id=thread_id,
         )
 
-        logger.info(f"=== RESTAURANT RESEARCH COMPLETE ===")
+        logger.debug("Restaurant research complete")
         return json.dumps(result, indent=2)
 
     except Exception as e:
-        logger.error(f"=== RESTAURANT RESEARCH FAILED ===")
-        logger.error(f"  Error: {e}")
+        logger.error(f"Restaurant research failed: {e}")
         return json.dumps({
             "restaurant_name": restaurant_name,
             "location": location,
@@ -255,6 +245,3 @@ def get_orchestrator_tools(include_browser_tools: bool | None = None) -> list:
 
     return tools
 
-
-# Legacy export for backwards compatibility
-ORCHESTRATOR_TOOLS = get_orchestrator_tools()

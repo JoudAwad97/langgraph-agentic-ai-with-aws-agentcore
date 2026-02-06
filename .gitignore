@@ -22,13 +22,12 @@ Thumbs.db
 *.sublime-workspace
 *.sublime-project
 
-# Environment variables (NEVER commit these)
+# Environment variables
 .env
 .env.local
 .env.*.local
-*.env
 
-# Credentials / Secrets (NEVER commit these)
+# Credentials / Secrets
 *.pem
 *.key
 credentials.json
@@ -61,3 +60,38 @@ tmp/
 temp/
 *.tmp
 *.temp
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+
+# Node.js
+node_modules/
+.npm
+.yarn/
+
+# TypeScript compiled output (source is .ts files)
+restaurant-finder-infra/bin/**/*.js
+restaurant-finder-infra/bin/**/*.d.ts
+restaurant-finder-infra/lib/**/*.js
+restaurant-finder-infra/lib/**/*.d.ts
+
+# CDK
+cdk.out/
+cdk.context.json
+
+# Chainlit
+chainlit.db
+
+# Evaluation results (generated output)
+evaluation_results/
+
+# UV lock file is committed, but ignore local caches
+.uv/
+.bedrock_agentcore.yaml

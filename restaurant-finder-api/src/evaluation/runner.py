@@ -115,6 +115,7 @@ class EvaluationRunner:
             response = self._agentcore_client.invoke_agent_runtime(
                 agentRuntimeArn=self.agent_arn,
                 qualifier="DEFAULT",
+                runtimeSessionId=session_id,
                 payload=json.dumps({
                     "prompt": prompt,
                     "conversation_id": session_id,
@@ -170,7 +171,7 @@ class EvaluationRunner:
         Returns:
             Tuple of (session_id, list of invocation results).
         """
-        session_id = session_id or f"eval-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
+        session_id = session_id or f"eval-{uuid.uuid4()}"
 
         results = []
         total = len(test_cases)
@@ -234,9 +235,9 @@ class EvaluationRunner:
         # Step 1: Run test cases to generate traces
         session_id, invocation_results = await self.run_test_cases(test_cases)
 
-        # Give CloudWatch time to ingest traces
-        logger.info("Waiting for trace ingestion...")
-        await asyncio.sleep(5)
+        # Give CloudWatch time to ingest traces (typically 30-60s)
+        logger.info("Waiting for trace ingestion (45s)...")
+        await asyncio.sleep(45)
 
         # Step 2: Run AgentCore Evaluations
         eval_results, metrics = await evaluate_session(

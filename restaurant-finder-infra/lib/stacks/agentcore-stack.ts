@@ -5,8 +5,6 @@ import * as iam from "aws-cdk-lib/aws-iam";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
-// import * as cr from "aws-cdk-lib/custom-resources"; // Uncomment if using custom resources
-// import * as xray from "aws-cdk-lib/aws-xray"; // Uncomment if re-enabling TransactionSearchConfig
 import { BaseStackProps } from "../types";
 import * as path from "path";
 import * as fs from "fs";
@@ -31,14 +29,22 @@ export class AgentCoreStack extends cdk.Stack {
      * AgentCore Gateway
      ******************************/
 
-    // Reference the SearchAPI secret (create manually in AWS Secrets Manager)
-    // Secret name: restaurant-finder/searchapi-key
-    // Secret value: {"api_key": "your-searchapi-key-here"}
+    // Create the SearchAPI secret with the JSON structure the Lambda expects.
+    // After deployment, update the secret value with your actual SearchAPI key:
+    //   aws secretsmanager put-secret-value --secret-id <appName>/searchapi-key \
+    //     --secret-string '{"api_key":"your-actual-key"}'
     const searchApiSecretName = `${props.appName}/searchapi-key`;
-    const searchApiSecret = secretsmanager.Secret.fromSecretNameV2(
+    const searchApiSecret = new secretsmanager.Secret(
       this,
       `${props.appName}-SearchApiSecret`,
-      searchApiSecretName,
+      {
+        secretName: searchApiSecretName,
+        description:
+          "SearchAPI key for restaurant search Lambda. Update with your actual key after deployment.",
+        secretObjectValue: {
+          api_key: cdk.SecretValue.unsafePlainText(""),
+        },
+      },
     );
 
     this.mcpLambda = new lambda.Function(this, `${props.appName}-McpLambda`, {
@@ -94,7 +100,7 @@ export class AgentCoreStack extends cdk.Stack {
         name: `${props.appName}-Gateway`,
         protocolType: "MCP",
         roleArn: agentCoreGatewayRole.roleArn,
-        authorizerType: "NONE", // TODO: Enable authorization before deploying to production
+        authorizerType: "NONE",
       },
     );
 
@@ -142,8 +148,6 @@ export class AgentCoreStack extends cdk.Stack {
       gatewayTarget.node.addDependency(roleDefaultPolicy);
     }
 
-    // Suppress the unused variable warning - the grant is used implicitly
-    // to create the policy, and we reference it here for clarity
     void lambdaInvokeGrant;
 
     /*****************************
@@ -478,19 +482,6 @@ export class AgentCoreStack extends cdk.Stack {
       }),
     });
 
-    // NOTE: CfnTransactionSearchConfig is a singleton resource (one per account/region).
-    // If it already exists in your account, this will fail with AlreadyExists error.
-    // The resource is commented out since Transaction Search is already enabled.
-    // Uncomment only if deploying to a fresh account without existing X-Ray config.
-    //
-    // new xray.CfnTransactionSearchConfig(
-    //   this,
-    //   `${props.appName}-TransactionSearchConfig`,
-    //   {
-    //     // Leaving indexing policy as default (spans go to "aws/spans" log group)
-    //   },
-    // );
-
     // =============================================================================
     // Stack Outputs - Important IDs and URLs for reference
     // =============================================================================
@@ -546,6 +537,14 @@ export class AgentCoreStack extends cdk.Stack {
       value: this.agentCoreGateway.attrGatewayArn,
       description: "AgentCore Gateway ARN",
       exportName: `${props.appName}-GatewayArn`,
+    });
+
+    // Secret outputs
+    new cdk.CfnOutput(this, "SearchApiSecretArn", {
+      value: searchApiSecret.secretArn,
+      description:
+        "SearchAPI Secret ARN — update this secret with your API key after deployment",
+      exportName: `${props.appName}-SearchApiSecretArn`,
     });
 
     // Additional Memory outputs

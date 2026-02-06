@@ -97,8 +97,8 @@ class RestaurantSearchResult(BaseModel):
         description="Filters applied to the search (cuisine, price, etc.)"
     )
     data_source: str = Field(
-        default="mock",
-        description="Source of the data (e.g., 'google_places', 'yelp', 'mock')"
+        default="searchapi",
+        description="Source of the data (e.g., 'searchapi', 'browser')"
     )
     notes: str | None = Field(
         default=None,
