@@ -72,6 +72,10 @@ jobs:
           echo "role_arn=$(echo $CONFIG | jq -r '.roleArn')" >> $GITHUB_OUTPUT
           echo "network_mode=$(echo $CONFIG | jq -r '.networkConfiguration.networkMode')" >> $GITHUB_OUTPUT
 
+          # Preserve existing environment variables (update-agent-runtime replaces the full config)
+          ENV_VARS=$(echo "$CONFIG" | jq -c '.environmentVariables // {}')
+          echo "env_vars=${ENV_VARS}" >> $GITHUB_OUTPUT
+
       - name: Update runtime
         if: inputs.skip_runtime_update != true
         run: |
@@ -80,7 +84,8 @@ jobs:
             --agent-runtime-id "${{ steps.runtime.outputs.id }}" \
             --agent-runtime-artifact "{\"containerConfiguration\":{\"containerUri\":\"${IMAGE}\"}}" \
             --role-arn "${{ steps.runtime.outputs.role_arn }}" \
-            --network-configuration "{\"networkMode\":\"${{ steps.runtime.outputs.network_mode }}\"}"
+            --network-configuration "{\"networkMode\":\"${{ steps.runtime.outputs.network_mode }}\"}" \
+            --environment-variables '${{ steps.runtime.outputs.env_vars }}'
 
       - name: Wait for runtime
         if: inputs.skip_runtime_update != true
